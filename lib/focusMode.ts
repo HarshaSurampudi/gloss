@@ -45,6 +45,16 @@ ytd-clarification-renderer,
 ytd-promoted-sparkles-web-renderer {
   display: none !important;
 }
+
+/* Description card (expander + structured content). Title and channel
+   info stay visible; only the description text/panel is hidden. */
+#description,
+#description-inline-expander,
+ytd-text-inline-expander,
+ytd-structured-description-content-renderer,
+ytd-watch-metadata #bottom-row {
+  display: none !important;
+}
 `;
 
 export function setFocusMode(enabled: boolean): void {
