@@ -21,6 +21,7 @@ import {
 } from '@/lib/cache';
 import { removeProgressMarkers, updateProgressMarkers } from '@/lib/progressMarkers';
 import { readVideoMeta } from '@/lib/videoMeta';
+import { setFocusMode } from '@/lib/focusMode';
 import { Header } from './components/Header';
 import { ConceptsList } from './components/ConceptsList';
 import { CaptionStrip } from './components/CaptionStrip';
@@ -28,6 +29,9 @@ import { Timeline } from './components/Timeline';
 import { Settings } from './components/Settings';
 import { OnboardKey } from './components/OnboardKey';
 import { ConceptDetail } from './components/ConceptDetail';
+import { NotesList } from './components/NotesList';
+import type { Note } from '@/lib/types';
+import { addNote, listNotes, onNotesChanged } from '@/lib/notes';
 
 interface AppProps {
   videoId: string;
@@ -57,6 +61,8 @@ export function App({ videoId }: AppProps) {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [translatedTexts, setTranslatedTexts] = useState<string[] | null>(null);
   const [translating, setTranslating] = useState(false);
+  const [viewMode, setViewMode] = useState<'concepts' | 'notes'>('concepts');
+  const [notes, setNotes] = useState<Note[]>([]);
   const forceRegen = useRef(false);
 
   // Ref to the YouTube <video> element; updated lazily so seeks work even if
@@ -304,6 +310,35 @@ export function App({ videoId }: AppProps) {
     videoId,
   ]);
 
+  // Notes — load on mount + when video changes; subscribe to storage changes.
+  useEffect(() => {
+    let cancelled = false;
+    listNotes(videoId).then((n) => {
+      if (!cancelled) setNotes(n);
+    });
+    const off = onNotesChanged(() => {
+      listNotes(videoId).then((n) => !cancelled && setNotes(n));
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [videoId]);
+
+  const saveNote = useCallback(
+    async (t: number, text: string, segmentText?: string) => {
+      await addNote(videoId, t, text, segmentText);
+      const n = await listNotes(videoId);
+      setNotes(n);
+    },
+    [videoId],
+  );
+
+  // Apply focus mode to the page whenever the preference changes.
+  useEffect(() => {
+    setFocusMode(!!prefs?.focusMode);
+  }, [prefs?.focusMode]);
+
   // Push state to liveStore so the fullscreen overlay can read it.
   useEffect(() => { liveStore.setConcepts(concepts); }, [concepts]);
   useEffect(() => { liveStore.setSegments(segments); }, [segments]);
@@ -429,6 +464,7 @@ export function App({ videoId }: AppProps) {
               targetLang={prefs.explainInLang}
               translatedTexts={translatedTexts}
               translating={translating}
+              onAddNote={saveNote}
             />
             <Timeline
               concepts={concepts}
@@ -437,14 +473,19 @@ export function App({ videoId }: AppProps) {
               activeId={activeConceptId}
               onSeek={seek}
             />
-            <ConceptsList
-              concepts={concepts}
-              activeId={activeConceptId}
-              currentT={currentT}
-              filter={filter}
-              onSeek={seek}
-              onOpenDetail={(c) => setDetailId(c.id)}
-            />
+            <ViewSwitcher view={viewMode} onChange={setViewMode} notesCount={notes.length} conceptsCount={concepts.length} />
+            {viewMode === 'concepts' ? (
+              <ConceptsList
+                concepts={concepts}
+                activeId={activeConceptId}
+                currentT={currentT}
+                filter={filter}
+                onSeek={seek}
+                onOpenDetail={(c) => setDetailId(c.id)}
+              />
+            ) : (
+              <NotesList videoId={videoId} notes={notes} onSeek={seek} />
+            )}
           </>
         )
       )}
@@ -459,6 +500,65 @@ export function App({ videoId }: AppProps) {
         />
       )}
     </Shell>
+  );
+}
+
+function ViewSwitcher({
+  view,
+  onChange,
+  notesCount,
+  conceptsCount,
+}: {
+  view: 'concepts' | 'notes';
+  onChange: (v: 'concepts' | 'notes') => void;
+  notesCount: number;
+  conceptsCount: number;
+}) {
+  return (
+    <div className="flex-none px-3 pt-1.5 pb-0">
+      <div
+        role="tablist"
+        className="inline-flex items-center h-[22px] rounded-full p-[2px] text-[10.5px] font-semibold"
+        style={{
+          background: 'color-mix(in oklab, var(--color-fg-subtle) 18%, transparent)',
+        }}
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'concepts'}
+          onClick={() => onChange('concepts')}
+          className="inline-flex items-center gap-1 h-[18px] px-2 rounded-full transition-colors"
+          style={{
+            background: view === 'concepts' ? 'var(--color-bg)' : 'transparent',
+            color: view === 'concepts' ? 'var(--color-fg)' : 'var(--color-fg-subtle)',
+            boxShadow: view === 'concepts' ? '0 1px 2px color-mix(in oklab, var(--color-fg) 20%, transparent)' : 'none',
+          }}
+        >
+          Concepts
+          {conceptsCount > 0 && (
+            <span className="font-mono text-[9.5px] opacity-70">{conceptsCount}</span>
+          )}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'notes'}
+          onClick={() => onChange('notes')}
+          className="inline-flex items-center gap-1 h-[18px] px-2 rounded-full transition-colors"
+          style={{
+            background: view === 'notes' ? 'var(--color-bg)' : 'transparent',
+            color: view === 'notes' ? 'var(--color-fg)' : 'var(--color-fg-subtle)',
+            boxShadow: view === 'notes' ? '0 1px 2px color-mix(in oklab, var(--color-fg) 20%, transparent)' : 'none',
+          }}
+        >
+          Notes
+          {notesCount > 0 && (
+            <span className="font-mono text-[9.5px] opacity-70">{notesCount}</span>
+          )}
+        </button>
+      </div>
+    </div>
   );
 }
 

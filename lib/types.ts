@@ -41,6 +41,22 @@ export interface Preferences {
    *  fetch a translation of the full transcript in one Gemini call and
    *  show a toggle in the caption strip. Default false. */
   translateTranscript: boolean;
+  /** Hides YouTube's comments, recommendations, Shorts shelves, and end-
+   *  screen cards while watching. Default false. */
+  focusMode: boolean;
+}
+
+export interface Note {
+  id: string;
+  videoId: string;
+  /** Seconds into the video. */
+  t: number;
+  /** Free-form note body. Empty string = pure bookmark. */
+  text: string;
+  /** Snapshot of the transcript line at that moment, for context. */
+  segmentText?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface SurfaceRequest {

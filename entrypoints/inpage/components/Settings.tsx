@@ -80,6 +80,46 @@ export function Settings({ prefs, onClose, onChange }: SettingsProps) {
           </div>
         </Field>
 
+        <Field label="Focus mode">
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => onChange({ focusMode: !prefs.focusMode })}
+              role="switch"
+              aria-checked={prefs.focusMode}
+              className="flex-none relative rounded-full transition-colors outline-none"
+              style={{
+                width: '36px',
+                height: '20px',
+                padding: 0,
+                border: 'none',
+                background: prefs.focusMode ? 'var(--color-accent)' : 'var(--color-border)',
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  position: 'absolute',
+                  top: '2px',
+                  left: prefs.focusMode ? '18px' : '2px',
+                  width: '16px',
+                  height: '16px',
+                  borderRadius: '9999px',
+                  background: '#fff',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+                  transition: 'left 180ms cubic-bezier(0.2, 0.7, 0.2, 1)',
+                }}
+              />
+            </button>
+            <span className="text-[12px] text-[var(--color-fg-muted)]">
+              {prefs.focusMode ? 'On' : 'Off'}
+            </span>
+          </div>
+          <div className="mt-1.5 text-[10.5px] text-[var(--color-fg-subtle)] leading-relaxed">
+            Hides YouTube comments, recommended videos, Shorts shelves, and end-screen cards. Just the video and Gloss.
+          </div>
+        </Field>
+
         <Field label="Translate transcript">
           <div className="flex items-center gap-2.5">
             <button

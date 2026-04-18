@@ -9,6 +9,7 @@ const DEFAULT_PREFS: Preferences = {
   geminiModel: 'gemini-flash-lite-latest',
   autoGenerate: true,
   translateTranscript: false,
+  focusMode: false,
 };
 
 function runtimeAlive(): boolean {

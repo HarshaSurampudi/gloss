@@ -10,6 +10,7 @@ interface CaptionStripProps {
   targetLang?: string;
   translatedTexts?: string[] | null;
   translating?: boolean;
+  onAddNote?: (t: number, text: string, segmentText?: string) => void;
 }
 
 type View = 'source' | 'target';
@@ -63,6 +64,7 @@ export function CaptionStrip(props: CaptionStripProps) {
       onSeek={props.onSeek}
       onClose={() => setExpanded(false)}
       langToggle={langToggle}
+      onAddNote={props.onAddNote}
     />
   ) : (
     <Compact
@@ -277,6 +279,7 @@ interface FullTranscriptProps {
   onSeek: (t: number) => void;
   onClose: () => void;
   langToggle: preact.ComponentChild;
+  onAddNote?: (t: number, text: string, segmentText?: string) => void;
 }
 
 function FullTranscript({
@@ -286,7 +289,14 @@ function FullTranscript({
   onSeek,
   onClose,
   langToggle,
+  onAddNote,
 }: FullTranscriptProps) {
+  const [notingIdx, setNotingIdx] = useState<number | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
+  const noteInputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (notingIdx !== null) noteInputRef.current?.focus();
+  }, [notingIdx]);
   const [query, setQuery] = useState('');
   const scrollerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -375,31 +385,95 @@ function FullTranscript({
         ) : (
           filtered.map(({ s, i }) => {
             const isActive = i === activeIdx;
+            const isNoting = notingIdx === i;
             return (
-              <button
-                type="button"
-                key={i}
-                ref={isActive && !query ? activeRef : undefined}
-                onClick={() => onSeek(s.start)}
-                className="w-full text-left flex gap-2 px-2 py-1.5 rounded items-start transition-colors hover:bg-[var(--color-surface-hover)]"
-                style={isActive ? { background: 'color-mix(in oklab, var(--color-accent) 16%, transparent)' } : undefined}
-              >
-                <span
-                  className="flex-none font-mono text-[10.5px] tabular-nums pt-[2px]"
-                  style={{ color: isActive ? 'var(--color-accent)' : 'var(--color-fg-subtle)' }}
+              <div key={i} className="group">
+                <div
+                  ref={isActive && !query ? (activeRef as any) : undefined}
+                  onClick={() => onSeek(s.start)}
+                  className="w-full text-left flex gap-2 px-2 py-1.5 rounded items-start transition-colors hover:bg-[var(--color-surface-hover)] cursor-pointer"
+                  style={isActive ? { background: 'color-mix(in oklab, var(--color-accent) 16%, transparent)' } : undefined}
                 >
-                  {formatTime(s.start)}
-                </span>
-                <span
-                  className="text-[12px] leading-snug"
-                  style={{
-                    color: isActive ? 'var(--color-fg)' : 'var(--color-fg-muted)',
-                    fontWeight: isActive ? 500 : 400,
-                  }}
-                >
-                  {query ? highlight(texts[i], query) : texts[i]}
-                </span>
-              </button>
+                  <span
+                    className="flex-none font-mono text-[10.5px] tabular-nums pt-[2px]"
+                    style={{ color: isActive ? 'var(--color-accent)' : 'var(--color-fg-subtle)' }}
+                  >
+                    {formatTime(s.start)}
+                  </span>
+                  <span
+                    className="flex-1 text-[12px] leading-snug"
+                    style={{
+                      color: isActive ? 'var(--color-fg)' : 'var(--color-fg-muted)',
+                      fontWeight: isActive ? 500 : 400,
+                    }}
+                  >
+                    {query ? highlight(texts[i], query) : texts[i]}
+                  </span>
+                  {onAddNote && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setNotingIdx(i);
+                        setNoteDraft('');
+                      }}
+                      title="Save as note"
+                      aria-label="Save as note"
+                      className="flex-none w-5 h-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 focus:opacity-100 text-[var(--color-fg-subtle)] hover:text-[var(--color-accent)] hover:bg-[color-mix(in_oklab,var(--color-accent)_12%,transparent)] transition-opacity"
+                    >
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                      </svg>
+                    </button>
+                  )}
+                </div>
+                {isNoting && onAddNote && (
+                  <div
+                    className="mx-2 my-1 p-2 rounded-md"
+                    style={{ background: 'color-mix(in oklab, var(--color-accent) 10%, var(--color-bg))', border: '1px solid color-mix(in oklab, var(--color-accent) 30%, transparent)' }}
+                  >
+                    <div className="text-[10.5px] uppercase tracking-wider font-semibold text-[var(--color-fg-subtle)] mb-1">
+                      Note at {formatTime(s.start)}
+                    </div>
+                    <textarea
+                      ref={noteInputRef}
+                      rows={2}
+                      value={noteDraft}
+                      placeholder="Optional thought… or leave blank to bookmark."
+                      onInput={(e) => setNoteDraft((e.target as HTMLTextAreaElement).value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          setNotingIdx(null);
+                        } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                          onAddNote(s.start, noteDraft.trim(), texts[i]);
+                          setNotingIdx(null);
+                        }
+                      }}
+                      className="w-full px-2 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[12px] leading-snug resize-none outline-none focus:border-[var(--color-accent)]"
+                    />
+                    <div className="mt-1.5 flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onAddNote(s.start, noteDraft.trim(), texts[i]);
+                          setNotingIdx(null);
+                        }}
+                        className="h-7 px-2.5 rounded-md text-[11px] font-semibold bg-[var(--color-accent)] text-[var(--color-accent-fg)]"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNotingIdx(null)}
+                        className="h-7 px-2 rounded-md text-[11px] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+                      >
+                        Cancel
+                      </button>
+                      <div className="ml-auto text-[10px] text-[var(--color-fg-subtle)]">⌘↵</div>
+                    </div>
+                  </div>
+                )}
+              </div>
             );
           })
         )}
