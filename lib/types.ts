@@ -37,6 +37,10 @@ export interface Preferences {
   /** When false, skip auto-surfacing on new videos — the user triggers it
    *  manually via a button. Cached videos still load instantly. Default true. */
   autoGenerate: boolean;
+  /** When true AND transcript language differs from explain-in language,
+   *  fetch a translation of the full transcript in one Gemini call and
+   *  show a toggle in the caption strip. Default false. */
+  translateTranscript: boolean;
 }
 
 export interface SurfaceRequest {
@@ -69,6 +73,15 @@ export interface DetailRequest {
   difficulty: string;
   model: string;
   additionalContext?: string;
+}
+
+export interface TranslateRequest {
+  type: 'translate';
+  /** Segments, already ordered by time. Only the text is translated. */
+  segments: TranscriptSegment[];
+  sourceLang: string;
+  targetLang: string;
+  model: string;
 }
 
 export interface FollowupRequest {

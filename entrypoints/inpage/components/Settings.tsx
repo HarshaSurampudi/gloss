@@ -80,6 +80,46 @@ export function Settings({ prefs, onClose, onChange }: SettingsProps) {
           </div>
         </Field>
 
+        <Field label="Translate transcript">
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => onChange({ translateTranscript: !prefs.translateTranscript })}
+              role="switch"
+              aria-checked={prefs.translateTranscript}
+              className="flex-none relative rounded-full transition-colors outline-none"
+              style={{
+                width: '36px',
+                height: '20px',
+                padding: 0,
+                border: 'none',
+                background: prefs.translateTranscript ? 'var(--color-accent)' : 'var(--color-border)',
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  position: 'absolute',
+                  top: '2px',
+                  left: prefs.translateTranscript ? '18px' : '2px',
+                  width: '16px',
+                  height: '16px',
+                  borderRadius: '9999px',
+                  background: '#fff',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+                  transition: 'left 180ms cubic-bezier(0.2, 0.7, 0.2, 1)',
+                }}
+              />
+            </button>
+            <span className="text-[12px] text-[var(--color-fg-muted)]">
+              {prefs.translateTranscript ? 'On' : 'Off'}
+            </span>
+          </div>
+          <div className="mt-1.5 text-[10.5px] text-[var(--color-fg-subtle)] leading-relaxed">
+            When on and the transcript's language differs from your explain-in language, Gloss translates the whole transcript in one Gemini call and lets you toggle views in the caption strip. Cached per video.
+          </div>
+        </Field>
+
         <Field label="Auto-generate">
           <div className="flex items-center gap-2.5">
             <button

@@ -17,6 +17,7 @@ const MAX_ENTRIES = 80;
 const TRANSCRIPT_VERSION = 1;
 const CONCEPTS_VERSION = 3; // bumped: elevated additionalContext to primary directive
 const DETAIL_VERSION = 2;   // bumped: elevated additionalContext to primary directive
+const TRANSLATION_VERSION = 1;
 
 interface TranscriptEntry {
   v: number;
@@ -42,14 +43,23 @@ interface DetailEntry {
   t: number;
 }
 
+interface TranslationEntry {
+  v: number;
+  targetLang: string;
+  /** Parallel to cached transcript's segments, in the same order. */
+  texts: string[];
+  t: number;
+}
+
 interface CacheShape {
   transcripts: Record<string, TranscriptEntry>;
   concepts: Record<string, ConceptsEntry>;
   details: Record<string, DetailEntry>;
+  translations: Record<string, TranslationEntry>;
 }
 
 function empty(): CacheShape {
-  return { transcripts: {}, concepts: {}, details: {} };
+  return { transcripts: {}, concepts: {}, details: {}, translations: {} };
 }
 
 async function read(): Promise<CacheShape> {
@@ -208,6 +218,41 @@ export async function setCachedDetail(
     t: Date.now(),
   };
   prune(c.details);
+  await write(c);
+}
+
+function translationKey(videoId: string, targetLang: string): string {
+  return `${videoId}::${targetLang}`;
+}
+
+export async function getCachedTranslation(
+  videoId: string,
+  targetLang: string,
+): Promise<string[] | null> {
+  const c = await read();
+  const key = translationKey(videoId, targetLang);
+  const e = c.translations?.[key];
+  if (!e || e.v !== TRANSLATION_VERSION) return null;
+  e.t = Date.now();
+  c.translations[key] = e;
+  await write(c);
+  return e.texts;
+}
+
+export async function setCachedTranslation(
+  videoId: string,
+  targetLang: string,
+  texts: string[],
+): Promise<void> {
+  const c = await read();
+  c.translations = c.translations ?? {};
+  c.translations[translationKey(videoId, targetLang)] = {
+    v: TRANSLATION_VERSION,
+    targetLang,
+    texts,
+    t: Date.now(),
+  };
+  prune(c.translations);
   await write(c);
 }
 

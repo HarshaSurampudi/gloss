@@ -6,30 +6,154 @@ interface CaptionStripProps {
   segments: TranscriptSegment[];
   currentT: number;
   onSeek: (t: number) => void;
+  sourceLang?: string;
+  targetLang?: string;
+  translatedTexts?: string[] | null;
+  translating?: boolean;
 }
+
+type View = 'source' | 'target';
 
 /**
  * Teleprompter-style caption view. Default: three lines (prev · current · next)
  * with the current line as the visual anchor — larger, bolder, centered.
  * Click to expand into a full scrollable transcript with search.
+ *
+ * When translation is enabled and available, a tight segmented toggle in the
+ * header lets the user flip between the source and the target language.
  */
-export function CaptionStrip({ segments, currentT, onSeek }: CaptionStripProps) {
+export function CaptionStrip(props: CaptionStripProps) {
   const [expanded, setExpanded] = useState(false);
+  const translationAvailable =
+    !!props.translatedTexts && props.translatedTexts.length === props.segments.length;
+  const langsDiffer =
+    !!props.sourceLang &&
+    !!props.targetLang &&
+    props.sourceLang.split('-')[0] !== props.targetLang.split('-')[0];
+
+  // Default to target when translation has arrived (user opted in).
+  const [view, setView] = useState<View>('source');
+  useEffect(() => {
+    if (translationAvailable) setView('target');
+  }, [translationAvailable]);
+
+  const effectiveTexts: string[] = useMemo(() => {
+    if (view === 'target' && translationAvailable && props.translatedTexts) {
+      return props.translatedTexts;
+    }
+    return props.segments.map((s) => s.text);
+  }, [view, translationAvailable, props.translatedTexts, props.segments]);
+
+  const langToggle = (props.translating || translationAvailable) && langsDiffer ? (
+    <LangToggle
+      view={view}
+      onChange={setView}
+      source={props.sourceLang ?? 'src'}
+      target={props.targetLang ?? 'tgt'}
+      translating={!!props.translating && !translationAvailable}
+      disabled={!translationAvailable}
+    />
+  ) : null;
 
   return expanded ? (
     <FullTranscript
-      segments={segments}
-      currentT={currentT}
-      onSeek={onSeek}
+      segments={props.segments}
+      texts={effectiveTexts}
+      currentT={props.currentT}
+      onSeek={props.onSeek}
       onClose={() => setExpanded(false)}
+      langToggle={langToggle}
     />
   ) : (
     <Compact
-      segments={segments}
-      currentT={currentT}
-      onSeek={onSeek}
+      segments={props.segments}
+      texts={effectiveTexts}
+      currentT={props.currentT}
+      onSeek={props.onSeek}
       onExpand={() => setExpanded(true)}
+      langToggle={langToggle}
     />
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+
+interface LangToggleProps {
+  view: View;
+  onChange: (v: View) => void;
+  source: string;
+  target: string;
+  translating: boolean;
+  disabled: boolean;
+}
+
+function LangToggle({ view, onChange, source, target, translating, disabled }: LangToggleProps) {
+  const srcCode = source.split('-')[0].toUpperCase();
+  const tgtCode = target.split('-')[0].toUpperCase();
+  return (
+    <div
+      role="tablist"
+      aria-label="Caption language"
+      className="flex-none inline-flex items-center h-[20px] rounded-full p-[2px] text-[9.5px] font-semibold tracking-wider"
+      style={{
+        background: 'color-mix(in oklab, var(--color-fg-subtle) 20%, transparent)',
+        border: '1px solid color-mix(in oklab, var(--color-fg-subtle) 18%, transparent)',
+      }}
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected={view === 'source'}
+        onClick={() => onChange('source')}
+        className="inline-flex items-center h-[16px] px-1.5 rounded-full transition-colors"
+        style={{
+          background: view === 'source' ? 'var(--color-bg)' : 'transparent',
+          color: view === 'source' ? 'var(--color-fg)' : 'var(--color-fg-subtle)',
+          boxShadow:
+            view === 'source'
+              ? '0 1px 2px color-mix(in oklab, var(--color-fg) 20%, transparent)'
+              : 'none',
+        }}
+      >
+        {srcCode}
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={view === 'target'}
+        onClick={() => !disabled && onChange('target')}
+        disabled={disabled}
+        className="inline-flex items-center h-[16px] px-1.5 rounded-full transition-colors"
+        style={{
+          background: view === 'target' ? 'var(--color-accent)' : 'transparent',
+          color:
+            view === 'target'
+              ? 'var(--color-accent-fg)'
+              : disabled
+              ? 'var(--color-fg-subtle)'
+              : 'var(--color-fg-muted)',
+          opacity: disabled && !translating ? 0.5 : 1,
+          cursor: disabled ? 'default' : 'pointer',
+          boxShadow:
+            view === 'target'
+              ? '0 1px 2px color-mix(in oklab, var(--color-accent) 40%, transparent)'
+              : 'none',
+        }}
+      >
+        {translating ? (
+          <span
+            className="inline-block w-[8px] h-[8px] rounded-full"
+            style={{
+              border: '1.5px solid currentColor',
+              borderRightColor: 'transparent',
+              animation: 'gloss-spin 0.7s linear infinite',
+            }}
+          />
+        ) : (
+          tgtCode
+        )}
+      </button>
+    </div>
   );
 }
 
@@ -37,20 +161,21 @@ export function CaptionStrip({ segments, currentT, onSeek }: CaptionStripProps) 
 
 interface CompactProps {
   segments: TranscriptSegment[];
+  texts: string[];
   currentT: number;
   onSeek: (t: number) => void;
   onExpand: () => void;
+  langToggle: preact.ComponentChild;
 }
 
-function Compact({ segments, currentT, onSeek, onExpand }: CompactProps) {
-  const { prev, current, next } = useMemo(() => {
-    const idx = findActiveIdx(segments, currentT);
-    return {
-      prev: idx > 0 ? segments[idx - 1] : null,
-      current: idx >= 0 ? segments[idx] : null,
-      next: idx >= 0 && idx < segments.length - 1 ? segments[idx + 1] : null,
-    };
-  }, [segments, currentT]);
+function Compact({ segments, texts, currentT, onSeek, onExpand, langToggle }: CompactProps) {
+  const idx = useMemo(() => findActiveIdx(segments, currentT), [segments, currentT]);
+  const prev = idx > 0 ? { seg: segments[idx - 1], text: texts[idx - 1] } : null;
+  const current = idx >= 0 ? { seg: segments[idx], text: texts[idx] } : null;
+  const next =
+    idx >= 0 && idx < segments.length - 1
+      ? { seg: segments[idx + 1], text: texts[idx + 1] }
+      : null;
 
   return (
     <div
@@ -60,30 +185,28 @@ function Compact({ segments, currentT, onSeek, onExpand }: CompactProps) {
           'linear-gradient(180deg, color-mix(in oklab, var(--color-accent-soft) 30%, var(--color-bg)) 0%, var(--color-bg) 100%)',
       }}
     >
-      {/* header */}
-      <div className="flex items-center px-3 pt-2 pb-1">
+      <div className="flex items-center gap-1.5 px-3 pt-2 pb-1">
         <span
           className="w-1.5 h-1.5 rounded-full anim-breathe"
           style={{ background: 'var(--color-accent)' }}
         />
-        <span className="ml-1.5 text-[9.5px] uppercase tracking-[0.14em] text-[var(--color-fg-subtle)] font-semibold">
+        <span className="text-[9.5px] uppercase tracking-[0.14em] text-[var(--color-fg-subtle)] font-semibold">
           Transcript
         </span>
-        <span className="ml-auto font-mono text-[10px] text-[var(--color-fg-subtle)] tabular-nums">
-          {formatTime(currentT)}
+        <span className="font-mono text-[10px] text-[var(--color-fg-subtle)] tabular-nums">
+          · {formatTime(currentT)}
         </span>
+        <div className="ml-auto">{langToggle}</div>
       </div>
 
       <div className="px-4 pb-2.5 pt-0.5">
-        {/* previous */}
         <Line
           text={prev?.text}
-          onClick={prev ? () => onSeek(prev.start) : undefined}
+          onClick={prev ? () => onSeek(prev.seg.start) : undefined}
           variant="faint"
         />
-        {/* current */}
         <div
-          key={current?.start ?? -1}
+          key={current?.seg.start ?? -1}
           className="py-1 anim-caption-in"
           style={{ lineHeight: 1.35 }}
         >
@@ -97,15 +220,13 @@ function Compact({ segments, currentT, onSeek, onExpand }: CompactProps) {
             </span>
           )}
         </div>
-        {/* next */}
         <Line
           text={next?.text}
-          onClick={next ? () => onSeek(next.start) : undefined}
+          onClick={next ? () => onSeek(next.seg.start) : undefined}
           variant="faint"
         />
       </div>
 
-      {/* expand hint */}
       <button
         type="button"
         onClick={onExpand}
@@ -131,9 +252,7 @@ function Line({
   variant: 'faint';
   onClick?: () => void;
 }) {
-  if (!text) {
-    return <div className="h-[14px]" />;
-  }
+  if (!text) return <div className="h-[14px]" />;
   const cls =
     variant === 'faint'
       ? 'text-[11.5px] text-[var(--color-fg-subtle)] leading-snug truncate'
@@ -153,12 +272,21 @@ function Line({
 
 interface FullTranscriptProps {
   segments: TranscriptSegment[];
+  texts: string[];
   currentT: number;
   onSeek: (t: number) => void;
   onClose: () => void;
+  langToggle: preact.ComponentChild;
 }
 
-function FullTranscript({ segments, currentT, onSeek, onClose }: FullTranscriptProps) {
+function FullTranscript({
+  segments,
+  texts,
+  currentT,
+  onSeek,
+  onClose,
+  langToggle,
+}: FullTranscriptProps) {
   const [query, setQuery] = useState('');
   const scrollerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -171,8 +299,8 @@ function FullTranscript({ segments, currentT, onSeek, onClose }: FullTranscriptP
     if (!q) return segments.map((s, i) => ({ s, i }));
     return segments
       .map((s, i) => ({ s, i }))
-      .filter(({ s }) => s.text.toLowerCase().includes(q));
-  }, [segments, query]);
+      .filter(({ i }) => texts[i].toLowerCase().includes(q));
+  }, [segments, texts, query]);
 
   useEffect(() => {
     if (query || userScrolling.current) return;
@@ -214,16 +342,15 @@ function FullTranscript({ segments, currentT, onSeek, onClose }: FullTranscriptP
         <span className="text-[9.5px] uppercase tracking-[0.14em] text-[var(--color-fg-subtle)] font-semibold">
           Full Transcript
         </span>
-        <span className="text-[10px] text-[var(--color-fg-subtle)]">
-          · {formatTime(currentT)}
-        </span>
+        <span className="text-[10px] text-[var(--color-fg-subtle)]">· {formatTime(currentT)}</span>
         <div className="ml-auto flex items-center gap-1">
+          {langToggle}
           <input
             type="text"
             value={query}
             onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
             placeholder="Find…"
-            className="h-6 w-28 px-2 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[11px] text-[var(--color-fg)] placeholder:text-[var(--color-fg-subtle)] outline-none focus:border-[var(--color-accent)]"
+            className="h-6 w-24 px-2 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[11px] text-[var(--color-fg)] placeholder:text-[var(--color-fg-subtle)] outline-none focus:border-[var(--color-accent)]"
             onKeyDown={(e) => e.key === 'Escape' && (setQuery(''), onClose())}
           />
           <button
@@ -270,7 +397,7 @@ function FullTranscript({ segments, currentT, onSeek, onClose }: FullTranscriptP
                     fontWeight: isActive ? 500 : 400,
                   }}
                 >
-                  {query ? highlight(s.text, query) : s.text}
+                  {query ? highlight(texts[i], query) : texts[i]}
                 </span>
               </button>
             );

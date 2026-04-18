@@ -4,6 +4,7 @@ import {
   buildFollowupSystem,
   generateText,
   surfaceConcepts,
+  translateSegments,
 } from '@/lib/gemini';
 import { getPrefs } from '@/lib/storage';
 import type {
@@ -12,6 +13,7 @@ import type {
   FollowupRequest,
   SurfaceRequest,
   SurfaceResult,
+  TranslateRequest,
 } from '@/lib/types';
 
 /**
@@ -20,7 +22,11 @@ import type {
  */
 export default defineBackground(() => {
   chrome.runtime.onMessage.addListener(
-    (msg: SurfaceRequest | DetailRequest | FollowupRequest, _sender, sendResponse) => {
+    (
+      msg: SurfaceRequest | DetailRequest | FollowupRequest | TranslateRequest,
+      _sender,
+      sendResponse,
+    ) => {
       if (msg?.type === 'surface') {
         (async () => {
           try {
@@ -78,6 +84,29 @@ export default defineBackground(() => {
             sendResponse({ ok: true, data: text } satisfies BgResponse<string>);
           } catch (e: any) {
             sendResponse({ ok: false, error: String(e?.message ?? e) } satisfies BgResponse<string>);
+          }
+        })();
+        return true;
+      }
+
+      if (msg?.type === 'translate') {
+        (async () => {
+          try {
+            const prefs = await getPrefs();
+            if (!prefs.geminiApiKey) {
+              sendResponse({ ok: false, error: 'No API key set.' } satisfies BgResponse<string[]>);
+              return;
+            }
+            const texts = await translateSegments({
+              apiKey: prefs.geminiApiKey,
+              model: msg.model || prefs.geminiModel,
+              segments: msg.segments,
+              sourceLang: msg.sourceLang,
+              targetLang: msg.targetLang,
+            });
+            sendResponse({ ok: true, data: texts } satisfies BgResponse<string[]>);
+          } catch (e: any) {
+            sendResponse({ ok: false, error: String(e?.message ?? e) } satisfies BgResponse<string[]>);
           }
         })();
         return true;

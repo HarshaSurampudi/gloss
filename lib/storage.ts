@@ -8,6 +8,7 @@ const DEFAULT_PREFS: Preferences = {
   theme: 'auto',
   geminiModel: 'gemini-flash-lite-latest',
   autoGenerate: true,
+  translateTranscript: false,
 };
 
 function runtimeAlive(): boolean {

@@ -6,6 +6,7 @@ import type {
   SurfaceRequest,
   SurfaceResult,
   TranscriptSegment,
+  TranslateRequest,
 } from '@/lib/types';
 import { getPrefs, onPrefsChanged, setPrefs } from '@/lib/storage';
 import { fetchTranscript } from '@/lib/transcript';
@@ -13,8 +14,10 @@ import { liveStore } from '@/lib/liveStore';
 import {
   getCachedConcepts,
   getCachedTranscript,
+  getCachedTranslation,
   setCachedConcepts,
   setCachedTranscript,
+  setCachedTranslation,
 } from '@/lib/cache';
 import { removeProgressMarkers, updateProgressMarkers } from '@/lib/progressMarkers';
 import { readVideoMeta } from '@/lib/videoMeta';
@@ -52,6 +55,8 @@ export function App({ videoId }: AppProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filter, setFilter] = useState('');
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [translatedTexts, setTranslatedTexts] = useState<string[] | null>(null);
+  const [translating, setTranslating] = useState(false);
   const forceRegen = useRef(false);
 
   // Ref to the YouTube <video> element; updated lazily so seeks work even if
@@ -242,6 +247,63 @@ export function App({ videoId }: AppProps) {
 
   const activeConceptId = useMemo(() => findActiveConcept(concepts, currentT), [concepts, currentT]);
 
+  // Kick off transcript translation when the user has opted in and the
+  // transcript's language differs from the explain-in language.
+  useEffect(() => {
+    if (!prefs || !prefs.translateTranscript) {
+      setTranslatedTexts(null);
+      return;
+    }
+    if (!transcriptLang || segments.length === 0) return;
+    const src = transcriptLang.split('-')[0];
+    const tgt = prefs.explainInLang.split('-')[0];
+    if (src === tgt) {
+      setTranslatedTexts(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setTranslatedTexts(null);
+      const cached = await getCachedTranslation(videoId, prefs.explainInLang);
+      if (cancelled) return;
+      if (cached && cached.length === segments.length) {
+        setTranslatedTexts(cached);
+        return;
+      }
+      const req: TranslateRequest = {
+        type: 'translate',
+        segments,
+        sourceLang: src,
+        targetLang: prefs.explainInLang,
+        model: prefs.geminiModel,
+      };
+      try {
+        if (!chrome.runtime?.id) return;
+        setTranslating(true);
+        chrome.runtime.sendMessage(req, (resp: BgResponse<string[]>) => {
+          setTranslating(false);
+          if (cancelled) return;
+          if (chrome.runtime.lastError) return;
+          if (!resp?.ok) return;
+          setTranslatedTexts(resp.data);
+          setCachedTranslation(videoId, prefs.explainInLang, resp.data);
+        });
+      } catch {
+        setTranslating(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    prefs?.translateTranscript,
+    prefs?.explainInLang,
+    prefs?.geminiModel,
+    transcriptLang,
+    segments,
+    videoId,
+  ]);
+
   // Push state to liveStore so the fullscreen overlay can read it.
   useEffect(() => { liveStore.setConcepts(concepts); }, [concepts]);
   useEffect(() => { liveStore.setSegments(segments); }, [segments]);
@@ -363,6 +425,10 @@ export function App({ videoId }: AppProps) {
               segments={segments}
               currentT={currentT}
               onSeek={seek}
+              sourceLang={transcriptLang}
+              targetLang={prefs.explainInLang}
+              translatedTexts={translatedTexts}
+              translating={translating}
             />
             <Timeline
               concepts={concepts}

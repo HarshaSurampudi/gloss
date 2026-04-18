@@ -162,6 +162,67 @@ export async function generateText(opts: {
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
 }
 
+/**
+ * Translate all transcript segments in ONE Gemini call. Returns strings in
+ * the same order as the input. Uses a JSON-schema response for reliability.
+ */
+export async function translateSegments(opts: {
+  apiKey: string;
+  model: string;
+  segments: TranscriptSegment[];
+  sourceLang: string;
+  targetLang: string;
+}): Promise<string[]> {
+  const items = opts.segments.map((s, i) => ({ i, text: s.text }));
+  const system = `You translate YouTube video transcript lines from ${opts.sourceLang} into ${opts.targetLang}. Preserve meaning and tone; don't summarize or paraphrase aggressively. Keep each line roughly the same length as the source so timing still feels aligned. Return translations in the same order as the input.`;
+
+  const schema = {
+    type: 'object',
+    properties: {
+      translations: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            i: { type: 'integer' },
+            text: { type: 'string' },
+          },
+          required: ['i', 'text'],
+        },
+      },
+    },
+    required: ['translations'],
+  };
+
+  const res = await fetch(`${BASE}/models/${opts.model}:generateContent?key=${opts.apiKey}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: 'user', parts: [{ text: JSON.stringify(items) }] }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: schema,
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
+  const payload = await res.json();
+  const text = payload.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  const parsed = JSON.parse(text) as { translations: Array<{ i: number; text: string }> };
+
+  // Reorder by index to match original segment order.
+  const out = new Array<string>(opts.segments.length).fill('');
+  for (const t of parsed.translations) {
+    if (t.i >= 0 && t.i < out.length) out[t.i] = t.text;
+  }
+  // Fallback: if Gemini missed any line, keep the original.
+  for (let i = 0; i < out.length; i++) {
+    if (!out[i]) out[i] = opts.segments[i].text;
+  }
+  return out;
+}
+
 export function buildDetailSystem(opts: {
   explainInLang: string;
   additionalContext?: string;
