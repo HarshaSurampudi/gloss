@@ -44,6 +44,8 @@ export interface Preferences {
   /** Hides YouTube's comments, recommendations, Shorts shelves, and end-
    *  screen cards while watching. Default false. */
   focusMode: boolean;
+  /** Default action when the player-bar screenshot button is clicked. */
+  screenshotAction: 'clipboard' | 'download';
 }
 
 export interface Note {
@@ -91,13 +93,8 @@ export interface DetailRequest {
   additionalContext?: string;
 }
 
-export interface TranslateRequest {
-  type: 'translate';
-  /** Segments, already ordered by time. Only the text is translated. */
-  segments: TranscriptSegment[];
-  sourceLang: string;
-  targetLang: string;
-  model: string;
+export interface ScreenshotRequest {
+  type: 'screenshot';
 }
 
 export interface FollowupRequest {

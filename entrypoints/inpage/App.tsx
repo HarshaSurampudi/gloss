@@ -6,10 +6,9 @@ import type {
   SurfaceRequest,
   SurfaceResult,
   TranscriptSegment,
-  TranslateRequest,
 } from '@/lib/types';
 import { getPrefs, onPrefsChanged, setPrefs } from '@/lib/storage';
-import { fetchTranscript } from '@/lib/transcript';
+import { fetchTranscript, fetchTranslatedSegments } from '@/lib/transcript';
 import { liveStore } from '@/lib/liveStore';
 import {
   getCachedConcepts,
@@ -22,6 +21,7 @@ import {
 import { removeProgressMarkers, updateProgressMarkers } from '@/lib/progressMarkers';
 import { readVideoMeta } from '@/lib/videoMeta';
 import { setFocusMode } from '@/lib/focusMode';
+import { takeScreenshot } from '@/lib/screenshot';
 import { Header } from './components/Header';
 import { ConceptsList } from './components/ConceptsList';
 import { CaptionStrip } from './components/CaptionStrip';
@@ -253,62 +253,9 @@ export function App({ videoId }: AppProps) {
 
   const activeConceptId = useMemo(() => findActiveConcept(concepts, currentT), [concepts, currentT]);
 
-  // Kick off transcript translation when the user has opted in and the
-  // transcript's language differs from the explain-in language.
-  useEffect(() => {
-    if (!prefs || !prefs.translateTranscript) {
-      setTranslatedTexts(null);
-      return;
-    }
-    if (!transcriptLang || segments.length === 0) return;
-    const src = transcriptLang.split('-')[0];
-    const tgt = prefs.explainInLang.split('-')[0];
-    if (src === tgt) {
-      setTranslatedTexts(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      setTranslatedTexts(null);
-      const cached = await getCachedTranslation(videoId, prefs.explainInLang);
-      if (cancelled) return;
-      if (cached && cached.length === segments.length) {
-        setTranslatedTexts(cached);
-        return;
-      }
-      const req: TranslateRequest = {
-        type: 'translate',
-        segments,
-        sourceLang: src,
-        targetLang: prefs.explainInLang,
-        model: prefs.geminiModel,
-      };
-      try {
-        if (!chrome.runtime?.id) return;
-        setTranslating(true);
-        chrome.runtime.sendMessage(req, (resp: BgResponse<string[]>) => {
-          setTranslating(false);
-          if (cancelled) return;
-          if (chrome.runtime.lastError) return;
-          if (!resp?.ok) return;
-          setTranslatedTexts(resp.data);
-          setCachedTranslation(videoId, prefs.explainInLang, resp.data);
-        });
-      } catch {
-        setTranslating(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    prefs?.translateTranscript,
-    prefs?.explainInLang,
-    prefs?.geminiModel,
-    transcriptLang,
-    segments,
-    videoId,
-  ]);
+  // Transcript translation paused — intentionally not running.
+  // The lib-level code (translateSegments, cache, SW handler) is kept so
+  // flipping this back on is a small change.
 
   // Notes — load on mount + when video changes; subscribe to storage changes.
   useEffect(() => {
@@ -333,6 +280,19 @@ export function App({ videoId }: AppProps) {
       return note;
     },
     [videoId],
+  );
+
+  const doScreenshot = useCallback(
+    (e: MouseEvent | KeyboardEvent) => {
+      if (!prefs) return;
+      const def = prefs.screenshotAction ?? 'clipboard';
+      const shift = 'shiftKey' in e && e.shiftKey;
+      const action = shift ? (def === 'clipboard' ? 'download' : 'clipboard') : def;
+      takeScreenshot(action).catch((err) => {
+        console.warn('[gloss/screenshot]', err);
+      });
+    },
+    [prefs?.screenshotAction],
   );
 
   const saveConceptToNotes = useCallback(
@@ -438,6 +398,8 @@ export function App({ videoId }: AppProps) {
         onToggleFocus={() => setPrefs({ focusMode: !prefs.focusMode })}
         notesOpen={notesOpen}
         onToggleNotes={() => setNotesOpen((v) => !v)}
+        onScreenshot={doScreenshot}
+        screenshotAction={prefs.screenshotAction ?? 'clipboard'}
       />
       {(status === 'loading-transcript' || status === 'surfacing') && (
         <LoadingBody
@@ -650,16 +612,21 @@ function ErrorBody({ message }: { message: string }) {
 }
 
 function findActiveConcept(concepts: Concept[], t: number): string | null {
-  // A concept is "active" if the playhead is within the window [t-2, t+6].
-  // Pick the one whose timestamp is closest to the playhead inside that window.
-  let best: Concept | null = null;
-  let bestDist = Infinity;
-  for (const c of concepts) {
-    const dist = Math.abs(c.t - t);
-    if (c.t - 2 <= t && c.t + 6 >= t && dist < bestDist) {
-      best = c;
-      bestDist = dist;
+  // A concept stays active from its timestamp until the NEXT concept's
+  // timestamp — i.e., the most recent concept whose t <= current time.
+  // Concepts are sorted by t, so binary-search for the last one.
+  if (concepts.length === 0) return null;
+  let lo = 0;
+  let hi = concepts.length - 1;
+  let ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (concepts[mid].t <= t) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
     }
   }
-  return best?.id ?? null;
+  return ans >= 0 ? concepts[ans].id : null;
 }

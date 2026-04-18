@@ -22,6 +22,11 @@ export interface TranscriptResult {
   lang: string;
 }
 
+/** Per-video cache of the timedtext request components — lets us re-fetch
+ *  a translated version (via YouTube's `tlang`) without stealing the
+ *  PoToken again. */
+const lastTrackInfo = new Map<string, { baseUrl: string; pot: string }>();
+
 export async function fetchTranscript(
   videoId: string,
   preferLang?: string,
@@ -93,10 +98,51 @@ async function tryWithStolenPoToken(
       segments = parseXmlTimedtext(body);
     }
     if (segments.length === 0) return null;
+    lastTrackInfo.set(videoId, { baseUrl: track.baseUrl, pot });
     log('OK with stolen PoToken', { lang: track.languageCode, segments: segments.length });
     return { segments, lang: track.languageCode };
   } catch (e) {
     log('stolen-pot strategy threw', e);
+    return null;
+  }
+}
+
+/**
+ * Re-fetch the same track with YouTube's auto-translate applied. Uses the
+ * `&tlang=<target>` parameter — YouTube routes through Google Translate
+ * on its side, returns json3 with translated utf8. Needs the PoToken and
+ * baseUrl from an earlier successful fetchTranscript call for the same
+ * videoId; returns null if we don't have them (e.g., DOM-fallback path).
+ */
+export async function fetchTranslatedSegments(
+  videoId: string,
+  targetLang: string,
+): Promise<string[] | null> {
+  const info = lastTrackInfo.get(videoId);
+  if (!info) {
+    log('translate: no cached track info for', videoId);
+    return null;
+  }
+  try {
+    const url = new URL(info.baseUrl);
+    url.searchParams.set('fmt', 'json3');
+    url.searchParams.set('c', 'WEB');
+    url.searchParams.set('pot', info.pot);
+    url.searchParams.set('tlang', targetLang);
+    const res = await fetch(url.toString(), { credentials: 'include' });
+    if (!res.ok) {
+      log('translate: tlang http', res.status);
+      return null;
+    }
+    const body = await res.text();
+    if (!body.trim()) return null;
+    const data = JSON.parse(body);
+    const segs = parseJson3(data);
+    if (segs.length === 0) return null;
+    log('translate: OK', { targetLang, segments: segs.length });
+    return segs.map((s) => s.text);
+  } catch (e) {
+    log('translate threw', e);
     return null;
   }
 }

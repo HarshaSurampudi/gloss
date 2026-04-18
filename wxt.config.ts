@@ -8,7 +8,7 @@ export default defineConfig({
     name: 'Gloss',
     description: 'Explain anything in any YouTube video.',
     permissions: ['storage', 'activeTab', 'scripting'],
-    host_permissions: ['*://*.youtube.com/*'],
+    host_permissions: ['<all_urls>'],
     action: {
       default_title: 'Gloss',
     },

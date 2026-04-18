@@ -43,10 +43,11 @@ ${readerLine}
 
 SELECTION: Surface every notable proper noun, specific term, technical concept, organization, person, place, event, framework, tool, policy, piece of jargon, or named reference that your reader might pause on. Dense academic, legal, policy, scientific, medical, or historical content warrants thorough surfacing; casual commentary or lifestyle content warrants selective surfacing. Never surface things the reader clearly already knows based on who they are.
 
-EXPLANATION (2-4 sentences per concept, in ${opts.explainInLang}):
-- Lead with what it is, in plain language.
-- Include the identifying details natural to the concept's domain — article/section number, year enacted, case citation, version number, institution, era, parent organization, report author, dosage, formula, spec reference — whichever genuinely applies.
-- Briefly anchor to how the video uses it.
+EXPLANATION (2-4 sentences per concept, in ${opts.explainInLang}). The purpose of this card is to TEACH THE READER WHAT THE VIDEO ASSUMED THEY ALREADY KNEW. Do not paraphrase the video — the reader is already hearing it.
+- Lead with what the concept is, in plain language (one short sentence).
+- Spend most of the card on BACKGROUND AND CONTEXT THAT THE VIDEO DID NOT COVER — prerequisites, history, why it exists, what it's typically compared to, who established it, what era / regime / version / section it belongs to, common misconceptions. Treat this as the "filling in" layer.
+- Only mention the video's angle if it's genuinely illuminating (e.g. a lesser-known interpretation the speaker is proposing). Otherwise skip it.
+- Include the identifying details natural to the concept's domain — article / section / year / citation / version / institution / era / parent organization / author — whichever genuinely applies.
 - If the reader has a specific goal or framing (from YOUR READER above), angle the explanation for that goal.
 - Skip speculation; prefer brief over invented.
 
@@ -160,67 +161,6 @@ export async function generateText(opts: {
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-}
-
-/**
- * Translate all transcript segments in ONE Gemini call. Returns strings in
- * the same order as the input. Uses a JSON-schema response for reliability.
- */
-export async function translateSegments(opts: {
-  apiKey: string;
-  model: string;
-  segments: TranscriptSegment[];
-  sourceLang: string;
-  targetLang: string;
-}): Promise<string[]> {
-  const items = opts.segments.map((s, i) => ({ i, text: s.text }));
-  const system = `You translate YouTube video transcript lines from ${opts.sourceLang} into ${opts.targetLang}. Preserve meaning and tone; don't summarize or paraphrase aggressively. Keep each line roughly the same length as the source so timing still feels aligned. Return translations in the same order as the input.`;
-
-  const schema = {
-    type: 'object',
-    properties: {
-      translations: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            i: { type: 'integer' },
-            text: { type: 'string' },
-          },
-          required: ['i', 'text'],
-        },
-      },
-    },
-    required: ['translations'],
-  };
-
-  const res = await fetch(`${BASE}/models/${opts.model}:generateContent?key=${opts.apiKey}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [{ text: JSON.stringify(items) }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: schema,
-      },
-    }),
-  });
-  if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
-  const payload = await res.json();
-  const text = payload.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-  const parsed = JSON.parse(text) as { translations: Array<{ i: number; text: string }> };
-
-  // Reorder by index to match original segment order.
-  const out = new Array<string>(opts.segments.length).fill('');
-  for (const t of parsed.translations) {
-    if (t.i >= 0 && t.i < out.length) out[t.i] = t.text;
-  }
-  // Fallback: if Gemini missed any line, keep the original.
-  for (let i = 0; i < out.length; i++) {
-    if (!out[i]) out[i] = opts.segments[i].text;
-  }
-  return out;
 }
 
 export function buildDetailSystem(opts: {

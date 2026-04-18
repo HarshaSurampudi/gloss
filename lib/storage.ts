@@ -10,6 +10,7 @@ const DEFAULT_PREFS: Preferences = {
   autoGenerate: true,
   translateTranscript: false,
   focusMode: false,
+  screenshotAction: 'clipboard',
 };
 
 function runtimeAlive(): boolean {

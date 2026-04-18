@@ -4,16 +4,15 @@ import {
   buildFollowupSystem,
   generateText,
   surfaceConcepts,
-  translateSegments,
 } from '@/lib/gemini';
 import { getPrefs } from '@/lib/storage';
 import type {
   BgResponse,
   DetailRequest,
   FollowupRequest,
+  ScreenshotRequest,
   SurfaceRequest,
   SurfaceResult,
-  TranslateRequest,
 } from '@/lib/types';
 
 /**
@@ -23,8 +22,8 @@ import type {
 export default defineBackground(() => {
   chrome.runtime.onMessage.addListener(
     (
-      msg: SurfaceRequest | DetailRequest | FollowupRequest | TranslateRequest,
-      _sender,
+      msg: SurfaceRequest | DetailRequest | FollowupRequest | ScreenshotRequest,
+      sender,
       sendResponse,
     ) => {
       if (msg?.type === 'surface') {
@@ -89,30 +88,23 @@ export default defineBackground(() => {
         return true;
       }
 
-      if (msg?.type === 'translate') {
+      if (msg?.type === 'screenshot') {
         (async () => {
           try {
-            const prefs = await getPrefs();
-            if (!prefs.geminiApiKey) {
-              sendResponse({ ok: false, error: 'No API key set.' } satisfies BgResponse<string[]>);
-              return;
-            }
-            const texts = await translateSegments({
-              apiKey: prefs.geminiApiKey,
-              model: msg.model || prefs.geminiModel,
-              segments: msg.segments,
-              sourceLang: msg.sourceLang,
-              targetLang: msg.targetLang,
-            });
-            sendResponse({ ok: true, data: texts } satisfies BgResponse<string[]>);
+            const windowId = sender.tab?.windowId;
+            const dataUrl = await chrome.tabs.captureVisibleTab(
+              typeof windowId === 'number' ? windowId : chrome.windows.WINDOW_ID_CURRENT,
+              { format: 'png' },
+            );
+            sendResponse({ ok: true, data: dataUrl } satisfies BgResponse<string>);
           } catch (e: any) {
-            sendResponse({ ok: false, error: String(e?.message ?? e) } satisfies BgResponse<string[]>);
+            sendResponse({ ok: false, error: String(e?.message ?? e) } satisfies BgResponse<string>);
           }
         })();
         return true;
       }
 
-      if (msg?.type === 'followup') {
+if (msg?.type === 'followup') {
         (async () => {
           try {
             const prefs = await getPrefs();

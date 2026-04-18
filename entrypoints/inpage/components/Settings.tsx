@@ -80,87 +80,75 @@ export function Settings({ prefs, onClose, onChange }: SettingsProps) {
           </div>
         </Field>
 
-        <Field label="Focus mode">
-          <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={() => onChange({ focusMode: !prefs.focusMode })}
-              role="switch"
-              aria-checked={prefs.focusMode}
-              className="flex-none relative rounded-full transition-colors outline-none"
-              style={{
-                width: '36px',
-                height: '20px',
-                padding: 0,
-                border: 'none',
-                background: prefs.focusMode ? 'var(--color-accent)' : 'var(--color-border)',
-              }}
-            >
-              <span
-                aria-hidden
-                style={{
-                  position: 'absolute',
-                  top: '2px',
-                  left: prefs.focusMode ? '18px' : '2px',
-                  width: '16px',
-                  height: '16px',
-                  borderRadius: '9999px',
-                  background: '#fff',
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
-                  transition: 'left 180ms cubic-bezier(0.2, 0.7, 0.2, 1)',
-                }}
-              />
-            </button>
-            <span className="text-[12px] text-[var(--color-fg-muted)]">
-              {prefs.focusMode ? 'On' : 'Off'}
-            </span>
+        <Field label="Screenshot action">
+          <div className="grid grid-cols-2 gap-1.5">
+            {(['clipboard', 'download'] as const).map((a) => (
+              <button
+                type="button"
+                key={a}
+                onClick={() => onChange({ screenshotAction: a })}
+                className={`h-8 rounded-md text-[11.5px] font-medium capitalize border ${
+                  prefs.screenshotAction === a
+                    ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)] border-[color-mix(in_oklab,var(--color-accent)_40%,transparent)]'
+                    : 'bg-[var(--color-surface)] text-[var(--color-fg-muted)] border-[var(--color-border)]'
+                }`}
+              >
+                {a === 'clipboard' ? 'Copy to clipboard' : 'Download'}
+              </button>
+            ))}
           </div>
           <div className="mt-1.5 text-[10.5px] text-[var(--color-fg-subtle)] leading-relaxed">
-            Hides YouTube comments, recommended videos, Shorts shelves, and end-screen cards. Just the video and Gloss.
+            The camera button in the video's control bar uses this action. Shift+click swaps it for the other option.
           </div>
         </Field>
 
-        <Field label="Translate transcript">
-          <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={() => onChange({ translateTranscript: !prefs.translateTranscript })}
-              role="switch"
-              aria-checked={prefs.translateTranscript}
-              className="flex-none relative rounded-full transition-colors outline-none"
-              style={{
-                width: '36px',
-                height: '20px',
-                padding: 0,
-                border: 'none',
-                background: prefs.translateTranscript ? 'var(--color-accent)' : 'var(--color-border)',
-              }}
-            >
-              <span
-                aria-hidden
-                style={{
-                  position: 'absolute',
-                  top: '2px',
-                  left: prefs.translateTranscript ? '18px' : '2px',
-                  width: '16px',
-                  height: '16px',
-                  borderRadius: '9999px',
-                  background: '#fff',
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
-                  transition: 'left 180ms cubic-bezier(0.2, 0.7, 0.2, 1)',
-                }}
-              />
-            </button>
-            <span className="text-[12px] text-[var(--color-fg-muted)]">
-              {prefs.translateTranscript ? 'On' : 'Off'}
-            </span>
-          </div>
-          <div className="mt-1.5 text-[10.5px] text-[var(--color-fg-subtle)] leading-relaxed">
-            When on and the transcript's language differs from your explain-in language, Gloss translates the whole transcript in one Gemini call and lets you toggle views in the caption strip. Cached per video.
-          </div>
-        </Field>
+{/*
+          ─── Transcript translation (disabled) ─────────────────────────
+          Didn't work reliably enough to ship. Kept intact so re-enabling
+          is just uncommenting this block.
 
-        <Field label="Auto-generate">
+          <Field label="Translate transcript">
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => onChange({ translateTranscript: !prefs.translateTranscript })}
+                role="switch"
+                aria-checked={prefs.translateTranscript}
+                className="flex-none relative rounded-full transition-colors outline-none"
+                style={{
+                  width: '36px',
+                  height: '20px',
+                  padding: 0,
+                  border: 'none',
+                  background: prefs.translateTranscript ? 'var(--color-accent)' : 'var(--color-border)',
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    top: '2px',
+                    left: prefs.translateTranscript ? '18px' : '2px',
+                    width: '16px',
+                    height: '16px',
+                    borderRadius: '9999px',
+                    background: '#fff',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+                    transition: 'left 180ms cubic-bezier(0.2, 0.7, 0.2, 1)',
+                  }}
+                />
+              </button>
+              <span className="text-[12px] text-[var(--color-fg-muted)]">
+                {prefs.translateTranscript ? 'On' : 'Off'}
+              </span>
+            </div>
+            <div className="mt-1.5 text-[10.5px] text-[var(--color-fg-subtle)] leading-relaxed">
+              When on, translates the transcript using YouTube's own auto-translate (no Gemini cost). Toggle between source and translated in the caption strip.
+            </div>
+          </Field>
+        */}
+
+<Field label="Auto-generate">
           <div className="flex items-center gap-2.5">
             <button
               type="button"
