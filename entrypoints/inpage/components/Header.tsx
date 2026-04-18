@@ -9,6 +9,8 @@ interface HeaderProps {
   onRegenerate: () => void;
   regenerating: boolean;
   canRegenerate: boolean;
+  focusMode: boolean;
+  onToggleFocus: () => void;
 }
 
 export function Header({
@@ -20,6 +22,8 @@ export function Header({
   onRegenerate,
   regenerating,
   canRegenerate,
+  focusMode,
+  onToggleFocus,
 }: HeaderProps) {
   const [searching, setSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -88,6 +92,31 @@ export function Header({
               </IconButton>
             </div>
           )}
+          <button
+            type="button"
+            onClick={onToggleFocus}
+            title={focusMode ? 'Exit focus mode' : 'Enter focus mode'}
+            aria-label="Toggle focus mode"
+            aria-pressed={focusMode}
+            className="w-7 h-7 inline-flex items-center justify-center rounded-md transition-colors"
+            style={
+              focusMode
+                ? {
+                    color: 'var(--color-accent)',
+                    background: 'color-mix(in oklab, var(--color-accent) 14%, transparent)',
+                  }
+                : { color: 'var(--color-fg-muted)' }
+            }
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="8" />
+              <line x1="12" y1="3" x2="12" y2="6" />
+              <line x1="12" y1="18" x2="12" y2="21" />
+              <line x1="3" y1="12" x2="6" y2="12" />
+              <line x1="18" y1="12" x2="21" y2="12" />
+              <circle cx="12" cy="12" r="2" fill="currentColor" />
+            </svg>
+          </button>
           <button
             type="button"
             onClick={onRegenerate}

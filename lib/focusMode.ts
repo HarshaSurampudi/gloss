@@ -46,13 +46,12 @@ ytd-promoted-sparkles-web-renderer {
   display: none !important;
 }
 
-/* Description card (expander + structured content). Title and channel
-   info stay visible; only the description text/panel is hidden. */
-#description,
-#description-inline-expander,
-ytd-text-inline-expander,
-ytd-structured-description-content-renderer,
-ytd-watch-metadata #bottom-row {
+/* Entire video metadata block — title, channel row, action bar,
+   description. Just the video + the Gloss panel remain. */
+ytd-watch-metadata,
+#above-the-fold,
+#meta-contents,
+#info-contents {
   display: none !important;
 }
 `;

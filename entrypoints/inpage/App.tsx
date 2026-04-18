@@ -423,6 +423,8 @@ export function App({ videoId }: AppProps) {
         onRegenerate={regenerate}
         regenerating={status === 'surfacing' || status === 'loading-transcript'}
         canRegenerate={status === 'ready' || status === 'error'}
+        focusMode={!!prefs.focusMode}
+        onToggleFocus={() => setPrefs({ focusMode: !prefs.focusMode })}
       />
       {(status === 'loading-transcript' || status === 'surfacing') && (
         <LoadingBody
