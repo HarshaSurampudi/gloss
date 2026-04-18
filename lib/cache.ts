@@ -15,8 +15,8 @@ const MAX_ENTRIES = 80;
  * fetching logic changes in a way that makes old entries incompatible.
  */
 const TRANSCRIPT_VERSION = 1;
-const CONCEPTS_VERSION = 2; // bumped: preview-handling prompt + model/context in key
-const DETAIL_VERSION = 1;
+const CONCEPTS_VERSION = 3; // bumped: elevated additionalContext to primary directive
+const DETAIL_VERSION = 2;   // bumped: elevated additionalContext to primary directive
 
 interface TranscriptEntry {
   v: number;

@@ -33,16 +33,26 @@ export async function surfaceConcepts(opts: {
     .map((s) => `[${Math.floor(s.start)}] ${s.text}`)
     .join('\n');
 
-  const system = `You identify concepts, names, tools, organizations, places, events, works, techniques, or jargon that a general audience might not immediately recognize in a video transcript. Be DOMAIN-NEUTRAL — the video could be about anything.
+  const readerLine = opts.additionalContext?.trim()
+    ? `YOUR READER (most important — reshape what you surface and how you explain to fit this person): ${opts.additionalContext.trim()}`
+    : `YOUR READER: a curious non-specialist who may or may not be familiar with the video's domain.`;
 
-For each concept, write a clear plain-language explanation (2-4 sentences) in ${opts.explainInLang}:
-- What it is in plain terms
-- Why it matters / how it's being used in this specific video (use transcript context)
-- Any essential background a newcomer needs
+  const system = `You identify concepts from a YouTube video's transcript that your reader would benefit from understanding.
 
-Explanations should stand alone — a reader who skips the video should understand each concept from the card alone. Never speculate; if something is unclear, keep the explanation brief rather than inventing detail.
+${readerLine}
 
-PREVIEW / TEASER HANDLING: Many videos open with a short preview — quick cuts of footage or quotes that show what's coming later. DO NOT pull concepts from the preview section. Wait until a concept is actually introduced and discussed in the main content, and anchor its timestamp to that introduction. If the same term appears in the preview and later in substance, use the substantive later timestamp, not the preview one. Signals of preview / teaser: rapid topic changes in the first 30-90 seconds, "coming up", "today we'll see", "stay tuned", quick disjoint soundbites.`;
+SELECTION: Surface every notable proper noun, specific term, technical concept, organization, person, place, event, framework, tool, policy, piece of jargon, or named reference that your reader might pause on. Dense academic, legal, policy, scientific, medical, or historical content warrants thorough surfacing; casual commentary or lifestyle content warrants selective surfacing. Never surface things the reader clearly already knows based on who they are.
+
+EXPLANATION (2-4 sentences per concept, in ${opts.explainInLang}):
+- Lead with what it is, in plain language.
+- Include the identifying details natural to the concept's domain — article/section number, year enacted, case citation, version number, institution, era, parent organization, report author, dosage, formula, spec reference — whichever genuinely applies.
+- Briefly anchor to how the video uses it.
+- If the reader has a specific goal or framing (from YOUR READER above), angle the explanation for that goal.
+- Skip speculation; prefer brief over invented.
+
+TONE: Calm, precise, fact-dense, respectful of the reader's intelligence.
+
+PREVIEW / TEASER HANDLING: Videos often open with a preview — rapid cuts or quotes of what's coming. DO NOT surface concepts from the preview. Wait until a concept is actually introduced and discussed in the main content, and anchor its timestamp there. Signals of preview: rapid topic changes in the first 30-90 seconds, phrases like "coming up", "today we'll see", "stay tuned", quick disjoint soundbites.`;
 
   const parts: string[] = [];
   parts.push(`Difficulty: ${opts.difficulty}. Explain-in language: ${opts.explainInLang}.`);
@@ -52,11 +62,6 @@ PREVIEW / TEASER HANDLING: Many videos open with a short preview — quick cuts 
   }
   if (opts.videoDescription) {
     parts.push(`\nVIDEO DESCRIPTION (from the creator — use as background but don't treat as transcript):\n${opts.videoDescription}`);
-  }
-  if (opts.additionalContext?.trim()) {
-    parts.push(
-      `\nADDITIONAL USER CONTEXT (use this to calibrate which concepts to surface and how to describe them):\n${opts.additionalContext.trim()}`,
-    );
   }
   parts.push(`\nTRANSCRIPT:\n${transcript}`);
   parts.push(
@@ -161,10 +166,10 @@ export function buildDetailSystem(opts: {
   explainInLang: string;
   additionalContext?: string;
 }): string {
-  const ctx = opts.additionalContext?.trim()
-    ? `\n\nAdditional user context:\n${opts.additionalContext.trim()}`
+  const readerLine = opts.additionalContext?.trim()
+    ? `\n\nYOUR READER (most important — shape the depth, angle, and framing to fit this person): ${opts.additionalContext.trim()}`
     : '';
-  return `You are Gloss's deep-dive explainer. A user is watching a YouTube video and wants a thorough but accessible explanation of ONE specific concept from it.
+  return `You are Gloss's deep-dive explainer. A user is watching a YouTube video and wants a thorough but accessible explanation of ONE specific concept from it.${readerLine}
 
 IMPORTANT FOCUS RULE: You'll be given the full video transcript as background context. It's there so you can see HOW the speaker introduces and uses the target concept. Do NOT summarize the whole video, do NOT survey other topics, do NOT drift. Your entire response must be about the target concept. Use the transcript to quote or reference specifics only when it directly illuminates the target concept.
 
@@ -179,7 +184,7 @@ Write in ${opts.explainInLang}. Use clear, plain language — a knowledgeable fr
 ## Background
 1-2 paragraphs of the history, prerequisites, or surrounding context a reader would need to fully appreciate the concept.
 
-Avoid marketing tone and hype. Don't repeat the concept's label as the first words. Never speculate — if something isn't in the transcript or isn't well-established, say so. Do NOT add any headings besides the three above.${ctx}`;
+Avoid marketing tone and hype. Don't repeat the concept's label as the first words. Never speculate — if something isn't in the transcript or isn't well-established, say so. Do NOT add any headings besides the three above.`;
 }
 
 export function buildDetailUserContent(opts: {
@@ -207,14 +212,14 @@ export function buildFollowupSystem(opts: {
   explainInLang: string;
   additionalContext?: string;
 }): string {
-  const ctx = opts.additionalContext?.trim()
-    ? `\n\nAdditional user context:\n${opts.additionalContext.trim()}`
+  const readerLine = opts.additionalContext?.trim()
+    ? `\n\nYOUR READER (most important — shape the depth, angle, and framing to fit this person): ${opts.additionalContext.trim()}`
     : '';
-  return `You are Gloss answering follow-up questions about the concept "${opts.concept.label}" (${opts.concept.type}) from a specific YouTube video. Respond in ${opts.explainInLang}.
+  return `You are Gloss answering follow-up questions about the concept "${opts.concept.label}" (${opts.concept.type}) from a specific YouTube video. Respond in ${opts.explainInLang}.${readerLine}
 
 Tone: helpful, concise, calm, respectful of the reader's intelligence. Default to 1-3 short paragraphs. Only use bullet lists when the user explicitly asks or when the information is genuinely a list. No markdown headings in follow-up answers.
 
-If the user's question drifts far from the concept, gently redirect once and then answer. Never speculate — if you don't know, say so.${ctx}`;
+If the user's question drifts far from the concept, gently redirect once and then answer. Never speculate — if you don't know, say so.`;
 }
 
 export function extractWindow(
