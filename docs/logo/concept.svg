@@ -1,14 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
-  <!-- Rounded-square tile -->
-  <rect x="4" y="4" width="120" height="120" rx="28" fill="#1C1446"/>
+  <!-- Rounded yellow tile. Fills the full canvas; only the rounded corner
+       arcs are transparent. -->
+  <rect x="0" y="0" width="128" height="128" rx="28" fill="#F5D142"/>
 
   <!-- Lens, centered in the tile -->
   <circle cx="64" cy="64" r="32"
-          stroke="#C7BBFF" stroke-width="9" fill="none"/>
+          stroke="#1F0D00" stroke-width="9" fill="none"/>
 
   <!-- Three wavy "text lines" inside the lens — midway swirl:
        3 arcs on top/bottom, 4 on the middle -->
-  <g stroke="#C7BBFF" stroke-width="3" stroke-linecap="round" fill="none">
+  <g stroke="#1F0D00" stroke-width="3" stroke-linecap="round" fill="none">
     <path d="M 54 54 q 3.33 -3 6.67 0 t 6.67 0 t 6.66 0"/>
     <path d="M 49 64 q 3.75 -3 7.5 0 t 7.5 0 t 7.5 0 t 7.5 0"/>
     <path d="M 54 74 q 3.33 -3 6.67 0 t 6.67 0 t 6.66 0"/>
@@ -16,5 +17,5 @@
 
   <!-- Handle — ~24px long, starting right at the lens edge -->
   <line x1="87" y1="87" x2="104" y2="104"
-        stroke="#C7BBFF" stroke-width="9" stroke-linecap="round"/>
+        stroke="#1F0D00" stroke-width="9" stroke-linecap="round"/>
 </svg>
