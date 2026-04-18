@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Note } from '@/lib/types';
 import { deleteNote, exportAsMarkdown, updateNote } from '@/lib/notes';
 import { readVideoMeta } from '@/lib/videoMeta';
@@ -7,18 +7,20 @@ import { formatTime } from '../utils';
 interface NotesListProps {
   videoId: string;
   notes: Note[];
+  currentT: number;
   onSeek: (t: number) => void;
+  onNewNote: () => void | Promise<void>;
+  onBack: () => void;
 }
 
-export function NotesList({ videoId, notes, onSeek }: NotesListProps) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (editingId && inputRef.current) inputRef.current.focus();
-  }, [editingId]);
-
+export function NotesList({
+  videoId,
+  notes,
+  currentT,
+  onSeek,
+  onNewNote,
+  onBack,
+}: NotesListProps) {
   const exportMd = () => {
     const meta = readVideoMeta();
     const md = exportAsMarkdown(videoId, meta.title ?? 'Video notes', notes);
@@ -34,147 +36,195 @@ export function NotesList({ videoId, notes, onSeek }: NotesListProps) {
     URL.revokeObjectURL(url);
   };
 
-  if (notes.length === 0) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-10 text-center">
-        <div
-          className="w-10 h-10 rounded-xl inline-flex items-center justify-center mb-3"
-          style={{
-            background: 'color-mix(in oklab, var(--color-accent) 10%, transparent)',
-            color: 'var(--color-accent)',
-          }}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-          </svg>
-        </div>
-        <div className="text-[13px] font-semibold text-[var(--color-fg)] mb-1">No notes yet</div>
-        <div className="text-[11.5px] text-[var(--color-fg-muted)] leading-relaxed max-w-[260px]">
-          Open the full transcript, hover any line, and tap the bookmark to save a moment — with or without a note.
-        </div>
-      </div>
-    );
-  }
+  const sorted = useMemo(() => notes.slice().sort((a, b) => a.t - b.t), [notes]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="flex-none flex items-center px-3 pt-2.5 pb-1.5">
-        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--color-fg-subtle)]">
-          Notes · {notes.length}
-        </div>
+      {/* Top bar */}
+      <div className="flex-none flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border-subtle)]">
         <button
           type="button"
-          onClick={exportMd}
-          className="ml-auto inline-flex items-center gap-1 h-7 px-2 rounded-md text-[10.5px] font-semibold text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)]"
-          title="Export notes as Markdown"
+          onClick={onBack}
+          className="inline-flex items-center gap-1 h-7 px-2 rounded-md text-[11.5px] font-medium text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)]"
+          title="Back to concepts"
         >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
-          Export
+          Concepts
+        </button>
+        <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--color-fg-subtle)] ml-1">
+          Notes · {sorted.length}
+        </span>
+        <div className="ml-auto flex items-center gap-1">
+          {sorted.length > 0 && (
+            <button
+              type="button"
+              onClick={exportMd}
+              title="Export as Markdown"
+              aria-label="Export notes as Markdown"
+              className="w-7 h-7 inline-flex items-center justify-center rounded-md text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)]"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* New-note button */}
+      <div className="flex-none px-3 pt-2.5 pb-1.5">
+        <button
+          type="button"
+          onClick={onNewNote}
+          className="w-full inline-flex items-center justify-center gap-1.5 h-9 rounded-lg text-[12.5px] font-semibold"
+          style={{
+            background: 'color-mix(in oklab, var(--color-accent) 14%, transparent)',
+            color: 'var(--color-accent)',
+            border: '1px dashed color-mix(in oklab, var(--color-accent) 45%, transparent)',
+          }}
+          title={`Add note at ${formatTime(currentT)}`}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          New note at {formatTime(currentT)}
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-1.5">
-        {notes.map((n) => (
+      {/* Notes list */}
+      {sorted.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
           <div
-            key={n.id}
-            className="rounded-lg p-2.5 bg-[var(--color-surface)] border border-[var(--color-border)]"
+            className="w-10 h-10 rounded-xl inline-flex items-center justify-center mb-2.5"
+            style={{
+              background: 'color-mix(in oklab, var(--color-accent) 10%, transparent)',
+              color: 'var(--color-accent)',
+            }}
           >
-            <div className="flex items-center gap-1.5 mb-1">
-              <button
-                type="button"
-                onClick={() => onSeek(n.t)}
-                className="inline-flex items-center gap-1 h-[20px] px-1.5 rounded-md font-mono text-[10.5px] tabular-nums text-[var(--color-accent)] hover:bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)]"
-                title="Jump to this moment"
-              >
-                {formatTime(n.t)}
-                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M5 12h14M13 6l6 6-6 6" />
-                </svg>
-              </button>
-              <div className="ml-auto flex items-center gap-0.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingId(n.id);
-                    setDraft(n.text);
-                  }}
-                  className="w-6 h-6 inline-flex items-center justify-center rounded text-[var(--color-fg-subtle)] hover:text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)]"
-                  title="Edit"
-                  aria-label="Edit note"
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => deleteNote(n.videoId, n.id)}
-                  className="w-6 h-6 inline-flex items-center justify-center rounded text-[var(--color-fg-subtle)] hover:text-[var(--color-danger)] hover:bg-[var(--color-surface-hover)]"
-                  title="Delete"
-                  aria-label="Delete note"
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/>
-                  </svg>
-                </button>
-              </div>
-            </div>
-            {n.segmentText && (
-              <div className="text-[11px] italic text-[var(--color-fg-subtle)] leading-snug mb-1 border-l-2 pl-2" style={{ borderColor: 'color-mix(in oklab, var(--color-accent) 35%, transparent)' }}>
-                {n.segmentText}
-              </div>
-            )}
-            {editingId === n.id ? (
-              <div className="mt-1">
-                <textarea
-                  ref={inputRef}
-                  value={draft}
-                  rows={3}
-                  onInput={(e) => setDraft((e.target as HTMLTextAreaElement).value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      setEditingId(null);
-                    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                      updateNote(n.videoId, n.id, draft.trim());
-                      setEditingId(null);
-                    }
-                  }}
-                  className="w-full px-2 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[12px] leading-snug resize-none outline-none focus:border-[var(--color-accent)]"
-                  placeholder="Your note…"
-                />
-                <div className="mt-1.5 flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      updateNote(n.videoId, n.id, draft.trim());
-                      setEditingId(null);
-                    }}
-                    className="h-7 px-2.5 rounded-md text-[11px] font-semibold bg-[var(--color-accent)] text-[var(--color-accent-fg)]"
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEditingId(null)}
-                    className="h-7 px-2 rounded-md text-[11px] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
-                  >
-                    Cancel
-                  </button>
-                  <div className="ml-auto text-[10px] text-[var(--color-fg-subtle)]">⌘↵ to save</div>
-                </div>
-              </div>
-            ) : n.text.trim() ? (
-              <div className="text-[12.5px] text-[var(--color-fg)] leading-relaxed whitespace-pre-wrap">
-                {n.text}
-              </div>
-            ) : (
-              <div className="text-[11.5px] italic text-[var(--color-fg-subtle)]">Bookmark · no text</div>
-            )}
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+            </svg>
           </div>
-        ))}
-      </div>
+          <div className="text-[12.5px] font-semibold text-[var(--color-fg)] mb-1">No notes yet</div>
+          <div className="text-[11.5px] text-[var(--color-fg-muted)] leading-relaxed max-w-[260px]">
+            Add a note at the current moment, or save a concept card into your notes from the bookmark icon.
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-1.5">
+          {sorted.map((n) => (
+            <NoteCard key={n.id} note={n} onSeek={onSeek} />
+          ))}
+        </div>
+      )}
     </div>
   );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+
+function NoteCard({ note, onSeek }: { note: Note; onSeek: (t: number) => void }) {
+  const [text, setText] = useState(note.text);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const saveTimer = useRef<number | undefined>(undefined);
+  const savedText = useRef(note.text);
+
+  // Sync when the note prop changes from outside (storage event).
+  useEffect(() => {
+    if (savedText.current !== note.text) {
+      savedText.current = note.text;
+      setText(note.text);
+    }
+  }, [note.text]);
+
+  // Autosize + focus for freshly-added empty notes.
+  useEffect(() => {
+    resize(taRef.current);
+    if (note.text === '' && note.updatedAt === note.createdAt) {
+      const ts = Date.now();
+      // Only focus if created within the last 2s — avoids pulling focus back
+      // for old empty notes after a re-render.
+      if (ts - note.createdAt < 2000) taRef.current?.focus();
+    }
+  }, [note.id]);
+
+  const scheduleSave = (next: string) => {
+    setText(next);
+    resize(taRef.current);
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      if (next !== savedText.current) {
+        savedText.current = next;
+        updateNote(note.videoId, note.id, next);
+      }
+    }, 400);
+  };
+
+  const flushSave = () => {
+    if (saveTimer.current) {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = undefined;
+    }
+    if (text !== savedText.current) {
+      savedText.current = text;
+      updateNote(note.videoId, note.id, text);
+    }
+  };
+
+  return (
+    <div
+      className="group relative rounded-lg p-2.5 bg-[var(--color-surface)] border border-[var(--color-border)] focus-within:border-[var(--color-accent)] transition-colors"
+    >
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <button
+          type="button"
+          onClick={() => onSeek(note.t)}
+          className="inline-flex items-center gap-1 h-[22px] px-2 rounded-md font-mono text-[11px] tabular-nums text-[var(--color-accent)] hover:bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] transition-colors"
+          title="Jump to this moment"
+        >
+          {formatTime(note.t)}
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 12h14M13 6l6 6-6 6" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={() => deleteNote(note.videoId, note.id)}
+          className="ml-auto w-6 h-6 inline-flex items-center justify-center rounded-md text-[var(--color-fg-subtle)] hover:text-[var(--color-danger)] hover:bg-[var(--color-surface-hover)] opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          title="Delete note"
+          aria-label="Delete note"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14" />
+          </svg>
+        </button>
+      </div>
+
+      <textarea
+        ref={taRef}
+        value={text}
+        placeholder="Your thoughts… (Enter saves, Shift+Enter new line)"
+        rows={1}
+        onInput={(e) => scheduleSave((e.target as HTMLTextAreaElement).value)}
+        onBlur={flushSave}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            flushSave();
+            taRef.current?.blur();
+          }
+        }}
+        className="w-full bg-transparent resize-none outline-none text-[12.5px] leading-relaxed text-[var(--color-fg)] placeholder:text-[var(--color-fg-subtle)]"
+        style={{ overflow: 'hidden' }}
+      />
+    </div>
+  );
+}
+
+function resize(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
 }

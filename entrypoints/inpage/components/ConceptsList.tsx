@@ -10,6 +10,24 @@ interface ConceptsListProps {
   filter: string;
   onSeek: (t: number) => void;
   onOpenDetail: (c: Concept) => void;
+  onSaveToNotes: (c: Concept) => void;
+}
+
+/** Scroll a child into view WITHIN a specific scroll container, without
+ *  bubbling the scroll up to ancestors (which caused the whole-page
+ *  scroll-up bug when the Gloss panel is in a Shadow DOM). */
+function scrollChildTo(
+  scroller: HTMLElement,
+  child: HTMLElement,
+  placement: 'top' | 'center' = 'top',
+  offset = 12,
+) {
+  const childTop = child.offsetTop - scroller.offsetTop;
+  const target =
+    placement === 'top'
+      ? childTop - offset
+      : childTop - scroller.clientHeight / 2 + child.clientHeight / 2;
+  scroller.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
 }
 
 export function ConceptsList({
@@ -19,11 +37,11 @@ export function ConceptsList({
   filter,
   onSeek,
   onOpenDetail,
+  onSaveToNotes,
 }: ConceptsListProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
   const userScrolling = useRef(false);
-  const [showJump, setShowJump] = useState(false);
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -36,40 +54,34 @@ export function ConceptsList({
     );
   }, [concepts, filter]);
 
-  // Auto-scroll to active concept, yielding to user.
+  // Auto-scroll active concept to the TOP of the internal scroller. We
+  // scroll the scroller manually instead of calling scrollIntoView, which
+  // can bubble up through the Shadow DOM and scroll the outer YouTube
+  // page.
   useEffect(() => {
     if (!activeId || userScrolling.current) return;
-    activeRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    const scroller = scrollerRef.current;
+    const el = activeRef.current;
+    if (scroller && el) scrollChildTo(scroller, el, 'top');
   }, [activeId]);
 
-  // Track scrolling to yield auto-follow + decide whether to show Jump-to-now.
+  // Track user scrolling so auto-follow yields for ~1.5s after any manual
+  // scroll. When the user stops, auto-scroll re-engages on the next
+  // active-concept change.
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
     let timeout: number | undefined;
-    const checkJump = () => {
-      const active = activeRef.current;
-      if (!active) {
-        setShowJump(false);
-        return;
-      }
-      const a = active.getBoundingClientRect();
-      const s = el.getBoundingClientRect();
-      const outOfView = a.bottom < s.top || a.top > s.bottom;
-      setShowJump(outOfView);
-    };
     const onScroll = () => {
       userScrolling.current = true;
       window.clearTimeout(timeout);
       timeout = window.setTimeout(() => {
         userScrolling.current = false;
       }, 1500);
-      checkJump();
     };
     el.addEventListener('scroll', onScroll, { passive: true });
-    checkJump();
     return () => el.removeEventListener('scroll', onScroll);
-  }, [activeId, filtered.length]);
+  }, []);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col relative">
@@ -97,31 +109,13 @@ export function ConceptsList({
                 innerRef={isActive ? activeRef : undefined}
                 onSeek={onSeek}
                 onOpenDetail={onOpenDetail}
+                onSaveToNotes={onSaveToNotes}
               />
             );
           })
         )}
       </div>
 
-      {showJump && (
-        <button
-          type="button"
-          onClick={() => {
-            userScrolling.current = false;
-            activeRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-          }}
-          className="absolute left-1/2 -translate-x-1/2 bottom-2 inline-flex items-center gap-1.5 h-7 px-3 rounded-full text-[11px] font-medium shadow-lg"
-          style={{
-            background: 'var(--color-accent)',
-            color: 'var(--color-accent-fg)',
-          }}
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 5v14M6 13l6 6 6-6" />
-          </svg>
-          Jump to now
-        </button>
-      )}
     </div>
   );
 }
@@ -133,9 +127,18 @@ interface ConceptCardProps {
   innerRef?: preact.RefObject<HTMLButtonElement>;
   onSeek: (t: number) => void;
   onOpenDetail: (c: Concept) => void;
+  onSaveToNotes: (c: Concept) => void;
 }
 
-function ConceptCard({ concept, isActive, isPast, innerRef, onSeek, onOpenDetail }: ConceptCardProps) {
+function ConceptCard({
+  concept,
+  isActive,
+  isPast,
+  innerRef,
+  onSeek,
+  onOpenDetail,
+  onSaveToNotes,
+}: ConceptCardProps) {
   const c = concept;
   return (
     <div
@@ -227,6 +230,21 @@ function ConceptCard({ concept, isActive, isPast, innerRef, onSeek, onOpenDetail
           {c.description}
         </div>
       )}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onSaveToNotes(c);
+        }}
+        onKeyDown={(e) => e.stopPropagation()}
+        title="Save to notes"
+        aria-label="Save to notes"
+        className="absolute bottom-1.5 right-2 w-6 h-6 inline-flex items-center justify-center rounded-md text-[var(--color-fg-subtle)] hover:text-[var(--color-accent)] hover:bg-[color-mix(in_oklab,var(--color-accent)_12%,transparent)] opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+        </svg>
+      </button>
     </div>
   );
 }

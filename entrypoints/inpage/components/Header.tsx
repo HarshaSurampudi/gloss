@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 interface HeaderProps {
   domain: string | null;
   conceptCount: number;
+  notesCount: number;
   filter: string;
   onFilter: (s: string) => void;
   onSettings: () => void;
@@ -11,11 +12,14 @@ interface HeaderProps {
   canRegenerate: boolean;
   focusMode: boolean;
   onToggleFocus: () => void;
+  notesOpen: boolean;
+  onToggleNotes: () => void;
 }
 
 export function Header({
   domain,
   conceptCount,
+  notesCount,
   filter,
   onFilter,
   onSettings,
@@ -24,6 +28,8 @@ export function Header({
   canRegenerate,
   focusMode,
   onToggleFocus,
+  notesOpen,
+  onToggleNotes,
 }: HeaderProps) {
   const [searching, setSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -92,6 +98,42 @@ export function Header({
               </IconButton>
             </div>
           )}
+          <button
+            type="button"
+            onClick={onToggleNotes}
+            title={notesOpen ? 'Back to concepts' : 'Open notes'}
+            aria-label="Toggle notes"
+            aria-pressed={notesOpen}
+            className="relative w-7 h-7 inline-flex items-center justify-center rounded-md transition-colors"
+            style={
+              notesOpen
+                ? {
+                    color: 'var(--color-accent)',
+                    background: 'color-mix(in oklab, var(--color-accent) 14%, transparent)',
+                  }
+                : { color: 'var(--color-fg-muted)' }
+            }
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+            </svg>
+            {notesCount > 0 && !notesOpen && (
+              <span
+                className="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center text-[8px] font-semibold tabular-nums"
+                style={{
+                  minWidth: '12px',
+                  height: '12px',
+                  padding: '0 3px',
+                  borderRadius: '6px',
+                  background: 'var(--color-accent)',
+                  color: 'var(--color-accent-fg)',
+                  lineHeight: 1,
+                }}
+              >
+                {notesCount > 99 ? '99+' : notesCount}
+              </span>
+            )}
+          </button>
           <button
             type="button"
             onClick={onToggleFocus}

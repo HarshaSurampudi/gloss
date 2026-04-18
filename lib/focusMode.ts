@@ -47,12 +47,32 @@ ytd-promoted-sparkles-web-renderer {
 }
 
 /* Entire video metadata block — title, channel row, action bar,
-   description. Just the video + the Gloss panel remain. */
+   description. Also the containing #below (leaves no residual flex gap
+   under the player) and the live-chat frame when present. */
 ytd-watch-metadata,
 #above-the-fold,
 #meta-contents,
-#info-contents {
+#info-contents,
+#below,
+ytd-watch-flexy #below,
+ytd-live-chat-frame,
+ytd-watch-chat-renderer {
   display: none !important;
+}
+
+/* Remove the row gap the primary column inserts between the player and
+   the (now-hidden) metadata — otherwise the gap keeps reserving space. */
+#primary.ytd-watch-flexy,
+ytd-watch-flexy[default-layout] #primary.ytd-watch-flexy {
+  row-gap: 0 !important;
+}
+
+/* Kill page-level vertical scroll. With everything below the video
+   hidden and Gloss scrolling internally, there's nothing the user needs
+   to scroll to on the outer page. */
+html, body {
+  overflow: hidden !important;
+  height: 100vh !important;
 }
 `;
 

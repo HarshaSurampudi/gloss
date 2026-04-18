@@ -61,7 +61,7 @@ export function App({ videoId }: AppProps) {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [translatedTexts, setTranslatedTexts] = useState<string[] | null>(null);
   const [translating, setTranslating] = useState(false);
-  const [viewMode, setViewMode] = useState<'concepts' | 'notes'>('concepts');
+  const [notesOpen, setNotesOpen] = useState(false);
   const [notes, setNotes] = useState<Note[]>([]);
   const forceRegen = useRef(false);
 
@@ -326,12 +326,22 @@ export function App({ videoId }: AppProps) {
   }, [videoId]);
 
   const saveNote = useCallback(
-    async (t: number, text: string, segmentText?: string) => {
-      await addNote(videoId, t, text, segmentText);
+    async (t: number, text: string, segmentText?: string): Promise<Note> => {
+      const note = await addNote(videoId, t, text, segmentText);
       const n = await listNotes(videoId);
       setNotes(n);
+      return note;
     },
     [videoId],
+  );
+
+  const saveConceptToNotes = useCallback(
+    async (c: Concept) => {
+      const body = c.description ? `${c.label}\n\n${c.description}` : c.label;
+      await saveNote(c.t, body);
+      setNotesOpen(true);
+    },
+    [saveNote],
   );
 
   // Apply focus mode to the page whenever the preference changes.
@@ -417,6 +427,7 @@ export function App({ videoId }: AppProps) {
       <Header
         domain={domain}
         conceptCount={concepts.length}
+        notesCount={notes.length}
         filter={filter}
         onFilter={setFilter}
         onSettings={() => setSettingsOpen(true)}
@@ -425,6 +436,8 @@ export function App({ videoId }: AppProps) {
         canRegenerate={status === 'ready' || status === 'error'}
         focusMode={!!prefs.focusMode}
         onToggleFocus={() => setPrefs({ focusMode: !prefs.focusMode })}
+        notesOpen={notesOpen}
+        onToggleNotes={() => setNotesOpen((v) => !v)}
       />
       {(status === 'loading-transcript' || status === 'surfacing') && (
         <LoadingBody
@@ -456,6 +469,17 @@ export function App({ videoId }: AppProps) {
             onBack={() => setDetailId(null)}
             onSeek={seek}
           />
+        ) : notesOpen ? (
+          <NotesList
+            videoId={videoId}
+            notes={notes}
+            currentT={currentT}
+            onSeek={seek}
+            onNewNote={async () => {
+              await saveNote(currentT, '');
+            }}
+            onBack={() => setNotesOpen(false)}
+          />
         ) : (
           <>
             <CaptionStrip
@@ -466,7 +490,6 @@ export function App({ videoId }: AppProps) {
               targetLang={prefs.explainInLang}
               translatedTexts={translatedTexts}
               translating={translating}
-              onAddNote={saveNote}
             />
             <Timeline
               concepts={concepts}
@@ -475,19 +498,15 @@ export function App({ videoId }: AppProps) {
               activeId={activeConceptId}
               onSeek={seek}
             />
-            <ViewSwitcher view={viewMode} onChange={setViewMode} notesCount={notes.length} conceptsCount={concepts.length} />
-            {viewMode === 'concepts' ? (
-              <ConceptsList
-                concepts={concepts}
-                activeId={activeConceptId}
-                currentT={currentT}
-                filter={filter}
-                onSeek={seek}
-                onOpenDetail={(c) => setDetailId(c.id)}
-              />
-            ) : (
-              <NotesList videoId={videoId} notes={notes} onSeek={seek} />
-            )}
+            <ConceptsList
+              concepts={concepts}
+              activeId={activeConceptId}
+              currentT={currentT}
+              filter={filter}
+              onSeek={seek}
+              onOpenDetail={(c) => setDetailId(c.id)}
+              onSaveToNotes={saveConceptToNotes}
+            />
           </>
         )
       )}
@@ -502,65 +521,6 @@ export function App({ videoId }: AppProps) {
         />
       )}
     </Shell>
-  );
-}
-
-function ViewSwitcher({
-  view,
-  onChange,
-  notesCount,
-  conceptsCount,
-}: {
-  view: 'concepts' | 'notes';
-  onChange: (v: 'concepts' | 'notes') => void;
-  notesCount: number;
-  conceptsCount: number;
-}) {
-  return (
-    <div className="flex-none px-3 pt-1.5 pb-0">
-      <div
-        role="tablist"
-        className="inline-flex items-center h-[22px] rounded-full p-[2px] text-[10.5px] font-semibold"
-        style={{
-          background: 'color-mix(in oklab, var(--color-fg-subtle) 18%, transparent)',
-        }}
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === 'concepts'}
-          onClick={() => onChange('concepts')}
-          className="inline-flex items-center gap-1 h-[18px] px-2 rounded-full transition-colors"
-          style={{
-            background: view === 'concepts' ? 'var(--color-bg)' : 'transparent',
-            color: view === 'concepts' ? 'var(--color-fg)' : 'var(--color-fg-subtle)',
-            boxShadow: view === 'concepts' ? '0 1px 2px color-mix(in oklab, var(--color-fg) 20%, transparent)' : 'none',
-          }}
-        >
-          Concepts
-          {conceptsCount > 0 && (
-            <span className="font-mono text-[9.5px] opacity-70">{conceptsCount}</span>
-          )}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === 'notes'}
-          onClick={() => onChange('notes')}
-          className="inline-flex items-center gap-1 h-[18px] px-2 rounded-full transition-colors"
-          style={{
-            background: view === 'notes' ? 'var(--color-bg)' : 'transparent',
-            color: view === 'notes' ? 'var(--color-fg)' : 'var(--color-fg-subtle)',
-            boxShadow: view === 'notes' ? '0 1px 2px color-mix(in oklab, var(--color-fg) 20%, transparent)' : 'none',
-          }}
-        >
-          Notes
-          {notesCount > 0 && (
-            <span className="font-mono text-[9.5px] opacity-70">{notesCount}</span>
-          )}
-        </button>
-      </div>
-    </div>
   );
 }
 
