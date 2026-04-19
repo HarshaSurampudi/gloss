@@ -63,7 +63,22 @@ export function App({ videoId }: AppProps) {
   const [translating, setTranslating] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [notes, setNotes] = useState<Note[]>([]);
+  const [surfaceProgress, setSurfaceProgress] = useState<{ done: number; total: number } | null>(null);
+  const [failedWindows, setFailedWindows] = useState<Array<{ startSec: number; endSec: number }>>([]);
+  const [processedWindows, setProcessedWindows] = useState<Array<{ startSec: number; endSec: number }>>([]);
   const forceRegen = useRef(false);
+  /** Per-window concept results, keyed by startSec. Kept so we can re-run merge
+   *  after a user-triggered retry of a single failed window. */
+  const chunkResultsRef = useRef<Map<number, { concepts: Concept[]; domain: string }>>(new Map());
+  /** Which model the current successful chunk results were generated with, so
+   *  a manual retry uses the same model and a cache write stays consistent. */
+  const surfaceRunCtxRef = useRef<{
+    model: string;
+    difficulty: string;
+    lang: string;
+    extraCtx?: string;
+    videoId: string;
+  } | null>(null);
 
   // Ref to the YouTube <video> element; updated lazily so seeks work even if
   // the element mounts later.
@@ -142,6 +157,11 @@ export function App({ videoId }: AppProps) {
   }, [prefs?.geminiApiKey, prefs?.explainInLang, prefs?.autoGenerate, videoId, status]);
 
   // Surface concepts via SW once transcript is ready. Uses cache first.
+  // Long videos are chunked into 10-minute windows and surfaced sequentially.
+  // Each chunk receives the concepts already surfaced in earlier chunks as a
+  // dedup signal. Concepts stream into the UI as each chunk completes so the
+  // user sees progress. Some duplicates are tolerated — a light post-hoc dedup
+  // by concept id is enough.
   useEffect(() => {
     if (status !== 'surfacing' || !prefs) return;
     const difficulty = prefs.difficulty === 'auto' ? 'intermediate' : prefs.difficulty;
@@ -161,53 +181,262 @@ export function App({ videoId }: AppProps) {
         setStatus('ready');
         return;
       }
+
       const meta = readVideoMeta();
-      const req: SurfaceRequest = {
-        type: 'surface',
-        segments,
-        explainInLang: prefs.explainInLang,
-        difficulty,
+      const duration = segments.reduce((m, s) => Math.max(m, s.start + (s.dur || 0)), 0);
+      const CHUNK_SEC = 600; // 10 min
+      const allWindows: Array<{ startSec: number; endSec: number }> = [];
+      for (let s = 0; s < Math.max(duration, 1); s += CHUNK_SEC) {
+        allWindows.push({ startSec: s, endSec: Math.min(duration, s + CHUNK_SEC) });
+      }
+      const windows = allWindows.filter((w) =>
+        segments.some((seg) => seg.start >= w.startSec && seg.start < w.endSec),
+      );
+
+      chunkResultsRef.current = new Map();
+      surfaceRunCtxRef.current = {
         model,
-        additionalContext: extraCtx,
-        videoTitle: meta.title,
-        videoDescription: meta.description,
+        difficulty,
+        lang: prefs.explainInLang,
+        extraCtx,
+        videoId,
       };
-      try {
-        if (!chrome.runtime?.id) throw new Error('Extension context invalidated — reload this tab.');
-        chrome.runtime.sendMessage(req, (resp: BgResponse<SurfaceResult>) => {
+      setFailedWindows([]);
+      setProcessedWindows([]);
+
+      // Short videos: single full-transcript call, no chunking.
+      if (windows.length <= 1) {
+        setSurfaceProgress({ done: 0, total: 1 });
+        const req: SurfaceRequest = {
+          type: 'surface',
+          segments,
+          explainInLang: prefs.explainInLang,
+          difficulty,
+          model,
+          additionalContext: extraCtx,
+          videoTitle: meta.title,
+          videoDescription: meta.description,
+        };
+        const resp = await runWithRetry<SurfaceResult>(req, 3);
+        if (cancelled) return;
+        setSurfaceProgress(null);
+        if (!resp.ok) {
+          setError(resp.error);
+          setStatus('error');
+          return;
+        }
+        setDomain(resp.data.domain);
+        setConcepts(resp.data.concepts);
+        setStatus('ready');
+        setCachedConcepts(
+          videoId,
+          prefs.explainInLang,
+          difficulty,
+          model,
+          extraCtx,
+          resp.data.domain,
+          resp.data.concepts,
+        );
+        return;
+      }
+
+      // Long videos: pipelined chunked surfacing. Up to CONCURRENCY requests
+      // may be in flight at once (spaced by LAUNCH_SPACING_MS to stay under
+      // RPM limits), but results commit to the UI and to the priorConcepts
+      // snapshot in strict launch order — so the user sees concepts appear
+      // chronologically and later chunks still benefit from earlier dedup.
+      const total = windows.length;
+      const CONCURRENCY = 3;
+      const LAUNCH_SPACING_MS = 300;
+      setSurfaceProgress({ done: 0, total });
+      console.log(
+        `[gloss/surface] video ${videoId}: duration=${Math.floor(duration)}s, ${windows.length} chunks of ${CHUNK_SEC}s (concurrency=${CONCURRENCY}, spacing=${LAUNCH_SPACING_MS}ms)`,
+      );
+
+      const failed: Array<{ startSec: number; endSec: number }> = [];
+      const accumulated: Concept[] = [];
+      let firstDomain = '';
+      const seenIds = new Set<string>();
+      let committedCount = 0;
+
+      // Pending results keyed by launch index, committed in order.
+      const pending = new Map<number, { window: { startSec: number; endSec: number }; resp: BgResponse<SurfaceResult> }>();
+      let nextCommitIdx = 0;
+      const commitReady = () => {
+        while (pending.has(nextCommitIdx)) {
+          const { window: w, resp } = pending.get(nextCommitIdx)!;
+          pending.delete(nextCommitIdx);
+          nextCommitIdx += 1;
+          const segmentCount = segments.filter(
+            (s) => s.start >= w.startSec && s.start < w.endSec,
+          ).length;
+          if (resp.ok) {
+            console.log(
+              `[gloss/surface] chunk ${Math.floor(w.startSec)}-${Math.floor(w.endSec)}s: ${segmentCount} lines → ${resp.data.concepts.length} concepts`,
+              resp.data.concepts.map((c) => `${Math.floor(c.t)}s ${c.label}`),
+            );
+            chunkResultsRef.current.set(w.startSec, {
+              concepts: resp.data.concepts,
+              domain: resp.data.domain,
+            });
+            if (!firstDomain && resp.data.domain) firstDomain = resp.data.domain;
+            for (const c of resp.data.concepts) {
+              if (seenIds.has(c.id)) continue;
+              seenIds.add(c.id);
+              accumulated.push(c);
+            }
+            accumulated.sort((a, b) => a.t - b.t);
+            setDomain(firstDomain);
+            setConcepts([...accumulated]);
+          } else {
+            console.warn(
+              `[gloss/surface] chunk ${Math.floor(w.startSec)}-${Math.floor(w.endSec)}s: FAILED (${segmentCount} lines) — ${resp.error}`,
+            );
+            failed.push(w);
+            setFailedWindows([...failed]);
+          }
+          setProcessedWindows((prev) => [...prev, w]);
+          committedCount += 1;
+          setSurfaceProgress({ done: committedCount, total });
+        }
+      };
+
+      const inflight = new Set<Promise<void>>();
+      for (let i = 0; i < windows.length; i++) {
+        if (cancelled) return;
+        // Throttle launches to stay under RPM and to avoid bursting.
+        if (i > 0) await new Promise((r) => setTimeout(r, LAUNCH_SPACING_MS));
+        if (cancelled) return;
+        // If at concurrency cap, wait for any in-flight to settle.
+        if (inflight.size >= CONCURRENCY) {
+          await Promise.race(inflight);
           if (cancelled) return;
-          if (chrome.runtime.lastError) {
-            setError(chrome.runtime.lastError.message || 'Extension error');
-            setStatus('error');
-            return;
-          }
-          if (!resp?.ok) {
-            setError(resp?.error || 'Gemini call failed');
-            setStatus('error');
-            return;
-          }
-          setDomain(resp.data.domain);
-          setConcepts(resp.data.concepts);
-          setStatus('ready');
-          setCachedConcepts(
-            videoId,
-            prefs.explainInLang,
-            difficulty,
-            model,
-            extraCtx,
-            resp.data.domain,
-            resp.data.concepts,
-          );
-        });
-      } catch (e: any) {
-        setError(String(e?.message ?? e));
+        }
+        const idx = i;
+        const w = windows[idx];
+        // Snapshot priors at launch time — reflects everything committed so
+        // far, which is a subset of what will eventually be known. Later
+        // chunks may miss dedup hints from chunks still in flight, but that's
+        // the trade-off for overlap; naive id-dedup on commit catches the
+        // obvious duplicates.
+        const priorConcepts = accumulated.map((c) => ({ label: c.label, t: c.t }));
+        const req: SurfaceRequest = {
+          type: 'surface',
+          segments,
+          explainInLang: prefs.explainInLang,
+          difficulty,
+          model,
+          additionalContext: extraCtx,
+          videoTitle: meta.title,
+          videoDescription: meta.description,
+          focusWindow: w,
+          priorConcepts,
+          maxConcepts: 6,
+        };
+        const p = (async () => {
+          const resp = await runWithRetry<SurfaceResult>(req, 3);
+          if (cancelled) return;
+          pending.set(idx, { window: w, resp });
+          commitReady();
+        })();
+        inflight.add(p);
+        p.finally(() => inflight.delete(p));
+      }
+      // Drain.
+      while (inflight.size > 0 && !cancelled) {
+        await Promise.race(inflight);
+      }
+      if (cancelled) return;
+      setSurfaceProgress(null);
+
+      if (accumulated.length === 0) {
+        setError(failed.length > 0 ? 'All chunks failed' : 'No concepts found');
         setStatus('error');
+        return;
+      }
+
+      setStatus('ready');
+      // Cache only when every window succeeded — partial results would be
+      // confusingly incomplete on a future cache hit.
+      if (failed.length === 0) {
+        setCachedConcepts(
+          videoId,
+          prefs.explainInLang,
+          difficulty,
+          model,
+          extraCtx,
+          firstDomain,
+          accumulated,
+        );
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [status, segments, videoId, prefs?.explainInLang, prefs?.difficulty, prefs?.geminiModel, prefs?.additionalContext]);
+
+  // Manual retry of a single failed chunk. Re-runs that window (3x retry),
+  // then merges its concepts into the accumulated list with id-based dedup.
+  const retryWindow = useCallback(
+    async (w: { startSec: number; endSec: number }) => {
+      if (!prefs || !surfaceRunCtxRef.current) return;
+      const ctx = surfaceRunCtxRef.current;
+      if (ctx.videoId !== videoId) return;
+      const meta = readVideoMeta();
+      // Pass concepts already in the UI as prior-dedup signal.
+      const priorConcepts = concepts.map((c) => ({ label: c.label, t: c.t }));
+      const req: SurfaceRequest = {
+        type: 'surface',
+        segments,
+        explainInLang: ctx.lang,
+        difficulty: ctx.difficulty,
+        model: ctx.model,
+        additionalContext: ctx.extraCtx,
+        videoTitle: meta.title,
+        videoDescription: meta.description,
+        focusWindow: w,
+        priorConcepts,
+        maxConcepts: 6,
+      };
+      setFailedWindows((prev) =>
+        prev.filter((x) => x.startSec !== w.startSec || x.endSec !== w.endSec),
+      );
+      const resp = await runWithRetry<SurfaceResult>(req, 3);
+      if (!resp.ok) {
+        setFailedWindows((prev) =>
+          prev.some((x) => x.startSec === w.startSec && x.endSec === w.endSec)
+            ? prev
+            : [...prev, w],
+        );
+        return;
+      }
+      chunkResultsRef.current.set(w.startSec, {
+        concepts: resp.data.concepts,
+        domain: resp.data.domain,
+      });
+      setConcepts((prev) => {
+        const byId = new Map(prev.map((c) => [c.id, c]));
+        for (const c of resp.data.concepts) if (!byId.has(c.id)) byId.set(c.id, c);
+        const next = Array.from(byId.values()).sort((a, b) => a.t - b.t);
+        setFailedWindows((prevFailed) => {
+          if (prevFailed.length === 0) {
+            setCachedConcepts(
+              videoId,
+              ctx.lang,
+              ctx.difficulty,
+              ctx.model,
+              ctx.extraCtx,
+              domain ?? '',
+              next,
+            );
+          }
+          return prevFailed;
+        });
+        return next;
+      });
+    },
+    [videoId, segments, prefs, concepts, domain],
+  );
 
   // Esc returns from detail view.
   useEffect(() => {
@@ -352,6 +581,8 @@ export function App({ videoId }: AppProps) {
   const regenerate = useCallback(() => {
     if (!prefs?.geminiApiKey || segments.length === 0) return;
     forceRegen.current = true;
+    chunkResultsRef.current = new Map();
+    setFailedWindows([]);
     setConcepts([]);
     setDomain(null);
     setError(null);
@@ -401,15 +632,9 @@ export function App({ videoId }: AppProps) {
         onScreenshot={doScreenshot}
         screenshotAction={prefs.screenshotAction ?? 'clipboard'}
       />
-      {(status === 'loading-transcript' || status === 'surfacing') && (
-        <LoadingBody
-          label={status === 'loading-transcript' ? 'Reading transcript…' : 'Finding concepts…'}
-          helper={
-            status === 'surfacing'
-              ? 'Analyzing the whole video. Usually takes 10–20 seconds — feel free to start watching.'
-              : 'Fetching captions from YouTube.'
-          }
-        />
+      {status === 'loading-transcript' && <LoadingBody phase="transcript" progress={null} />}
+      {status === 'surfacing' && concepts.length === 0 && (
+        <LoadingBody phase="surfacing" progress={surfaceProgress} />
       )}
       {status === 'idle-manual' && (
         <IdleManual
@@ -421,7 +646,7 @@ export function App({ videoId }: AppProps) {
       )}
       {status === 'no-transcript' && <Center muted>No transcript available for this video.</Center>}
       {status === 'error' && <ErrorBody message={error ?? 'Something went wrong.'} />}
-      {status === 'ready' && (
+      {(status === 'ready' || (status === 'surfacing' && concepts.length > 0)) && (
         detailId ? (
           <ConceptDetail
             videoId={videoId}
@@ -444,6 +669,9 @@ export function App({ videoId }: AppProps) {
           />
         ) : (
           <>
+            {status === 'surfacing' && surfaceProgress && (
+              <SurfacingBanner progress={surfaceProgress} />
+            )}
             <CaptionStrip
               segments={segments}
               currentT={currentT}
@@ -459,6 +687,10 @@ export function App({ videoId }: AppProps) {
               durationSec={getVideo()?.duration ?? 0}
               activeId={activeConceptId}
               onSeek={seek}
+              failedWindows={failedWindows}
+              onRetryWindow={retryWindow}
+              processedWindows={processedWindows}
+              inProgress={status === 'surfacing'}
             />
             <ConceptsList
               concepts={concepts}
@@ -483,6 +715,79 @@ export function App({ videoId }: AppProps) {
         />
       )}
     </Shell>
+  );
+}
+
+async function runWithRetry<T>(
+  req: SurfaceRequest,
+  maxAttempts: number,
+): Promise<BgResponse<T>> {
+  let lastErr = 'Unknown error';
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      if (!chrome.runtime?.id) return { ok: false, error: 'Extension context invalidated — reload this tab.' };
+      const resp = await new Promise<BgResponse<T>>((resolve) => {
+        chrome.runtime.sendMessage(req, (r: BgResponse<T>) => {
+          if (chrome.runtime.lastError) {
+            resolve({ ok: false, error: chrome.runtime.lastError.message || 'Extension error' });
+            return;
+          }
+          resolve(r ?? { ok: false, error: 'Empty response' });
+        });
+      });
+      if (resp.ok) return resp;
+      lastErr = resp.error;
+    } catch (e: any) {
+      lastErr = String(e?.message ?? e);
+    }
+    if (attempt < maxAttempts - 1) {
+      // Exponential backoff with extra wait for rate-limit errors, since the
+      // server is asking us to slow down. 1s, 2s, 4s… plus a rate-limit
+      // surcharge.
+      const isRateLimit = /\b(429|rate limit|quota|resource_exhausted)\b/i.test(lastErr);
+      const base = 1000 * Math.pow(2, attempt);
+      const delay = isRateLimit ? base + 4000 : base;
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  return { ok: false, error: lastErr };
+}
+
+function SurfacingBanner({ progress }: { progress: { done: number; total: number } }) {
+  const pct = (progress.done / Math.max(1, progress.total)) * 100;
+  return (
+    <div className="flex-none px-3 pt-2">
+      <div
+        className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[11px]"
+        style={{
+          background: 'color-mix(in oklab, var(--color-accent) 8%, transparent)',
+          border: '1px solid color-mix(in oklab, var(--color-accent) 25%, transparent)',
+        }}
+      >
+        <span
+          className="inline-block w-1.5 h-1.5 rounded-full anim-breathe flex-none"
+          style={{ background: 'var(--color-accent)' }}
+        />
+        <span className="text-[var(--color-fg)] font-medium">
+          Finding concepts
+        </span>
+        <span className="text-[var(--color-fg-muted)] tabular-nums">
+          {Math.round((progress.done / Math.max(1, progress.total)) * 100)}%
+        </span>
+        <div
+          className="ml-auto h-1 flex-1 max-w-[120px] rounded-full overflow-hidden"
+          style={{ background: 'var(--color-border-subtle)' }}
+        >
+          <div
+            className="h-full transition-all duration-500 ease-out"
+            style={{
+              width: `${Math.max(4, pct)}%`,
+              background: 'var(--color-accent)',
+            }}
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -571,30 +876,88 @@ function IdleManual({
   );
 }
 
-function LoadingBody({ label, helper }: { label: string; helper?: string }) {
+function LoadingBody({
+  phase,
+  progress,
+}: {
+  phase: 'transcript' | 'surfacing';
+  progress: { done: number; total: number } | null;
+}) {
+  const isChunked = phase === 'surfacing' && progress !== null && progress.total > 1;
+  const pct = progress ? (progress.done / Math.max(1, progress.total)) * 100 : null;
+
+  const label =
+    phase === 'transcript'
+      ? 'Reading transcript'
+      : isChunked
+      ? `Finding concepts · ${Math.round(pct!)}%`
+      : 'Finding concepts';
+
+  const helper =
+    phase === 'transcript'
+      ? 'Pulling captions from YouTube.'
+      : isChunked
+      ? 'Longer videos take a bit — concepts will start appearing shortly.'
+      : 'Analyzing the video. Usually 10–20 seconds — feel free to start watching.';
+
   return (
-    <div className="flex-1 flex flex-col">
-      <div className="flex-none px-3 pt-3 pb-2">
-        <div className="flex items-center gap-2 mb-1">
+    <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-none px-3 pt-3 pb-3 border-b border-[var(--color-border-subtle)]">
+        <div className="flex items-center gap-2 mb-1.5">
           <span
-            className="w-2 h-2 rounded-full anim-breathe"
+            className="inline-block w-2 h-2 rounded-full anim-breathe"
             style={{ background: 'var(--color-accent)' }}
           />
-          <div className="text-[11.5px] font-semibold text-[var(--color-fg)]">{label}</div>
+          <div className="text-[12px] font-semibold text-[var(--color-fg)] flex-1 truncate">
+            {label}
+          </div>
+          {pct !== null && isChunked && (
+            <div className="text-[10.5px] font-mono tabular-nums text-[var(--color-fg-subtle)]">
+              {Math.round(pct)}%
+            </div>
+          )}
         </div>
-        {helper && (
-          <div className="text-[11px] text-[var(--color-fg-muted)] leading-relaxed">{helper}</div>
-        )}
+        <div className="text-[11px] text-[var(--color-fg-muted)] leading-relaxed mb-2">
+          {helper}
+        </div>
+        {/* Determinate bar when we know the total; otherwise an indeterminate shimmer. */}
+        <div
+          className="h-1 rounded-full overflow-hidden"
+          style={{ background: 'var(--color-border-subtle)' }}
+        >
+          {pct !== null ? (
+            <div
+              className="h-full transition-all duration-500 ease-out"
+              style={{
+                width: `${Math.max(4, pct)}%`,
+                background: 'var(--color-accent)',
+              }}
+            />
+          ) : (
+            <div
+              className="h-full anim-slide"
+              style={{
+                width: '35%',
+                background:
+                  'linear-gradient(90deg, transparent, var(--color-accent), transparent)',
+              }}
+            />
+          )}
+        </div>
       </div>
-      <div className="flex-1 overflow-hidden px-2 space-y-2">
-        {[90, 70, 82, 64, 76].map((w, i) => (
-          <div key={i} className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-3 space-y-2">
+      <div className="flex-1 overflow-hidden px-2 pt-2 space-y-2">
+        {[92, 78, 86, 70, 80, 64].map((w, i) => (
+          <div
+            key={i}
+            className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-3 space-y-2"
+            style={{ opacity: 1 - i * 0.08 }}
+          >
             <div className="flex gap-2 items-center">
               <div className="h-3 w-14 rounded shimmer" />
               <div className="h-3 w-10 rounded shimmer ml-auto" />
             </div>
             <div className="h-3.5 rounded shimmer" style={{ width: w + '%' }} />
-            <div className="h-2.5 rounded shimmer" style={{ width: w - 20 + '%' }} />
+            <div className="h-2.5 rounded shimmer" style={{ width: Math.max(30, w - 20) + '%' }} />
           </div>
         ))}
       </div>

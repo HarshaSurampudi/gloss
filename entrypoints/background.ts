@@ -43,6 +43,9 @@ export default defineBackground(() => {
               additionalContext: msg.additionalContext,
               videoTitle: msg.videoTitle,
               videoDescription: msg.videoDescription,
+              focusWindow: msg.focusWindow,
+              priorConcepts: msg.priorConcepts,
+              maxConcepts: msg.maxConcepts,
             });
             sendResponse({ ok: true, data } satisfies BgResponse<SurfaceResult>);
           } catch (e: any) {

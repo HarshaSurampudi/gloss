@@ -15,7 +15,7 @@ const MAX_ENTRIES = 80;
  * fetching logic changes in a way that makes old entries incompatible.
  */
 const TRANSCRIPT_VERSION = 1;
-const CONCEPTS_VERSION = 4; // bumped: card descriptions now focus on what's NOT in the video
+const CONCEPTS_VERSION = 6; // bumped: sequential chunked surfacing + tightened focus-window prompt
 const DETAIL_VERSION = 2;   // bumped: elevated additionalContext to primary directive
 const TRANSLATION_VERSION = 1;
 

@@ -8,13 +8,34 @@ interface TimelineProps {
   durationSec: number;
   activeId: string | null;
   onSeek: (t: number) => void;
+  /** Time windows where chunked surfacing failed — rendered as a red bar,
+   *  clicking re-runs the chunk. */
+  failedWindows?: Array<{ startSec: number; endSec: number }>;
+  onRetryWindow?: (w: { startSec: number; endSec: number }) => void;
+  /** Time windows already scanned by chunked surfacing (success or failure).
+   *  Rendered as a subtle accent tint so the user sees how far the run has
+   *  progressed along the video's timeline. */
+  processedWindows?: Array<{ startSec: number; endSec: number }>;
+  /** When true, the chunked run is still in progress — unscanned regions get
+   *  a shimmer to signal more is coming. */
+  inProgress?: boolean;
 }
 
 /**
  * Horizontal concept timeline. Each concept is a colored dot at its timestamp
  * position, a playhead shows "now", clicking a dot or the track seeks the video.
  */
-export function Timeline({ concepts, currentT, durationSec, activeId, onSeek }: TimelineProps) {
+export function Timeline({
+  concepts,
+  currentT,
+  durationSec,
+  activeId,
+  onSeek,
+  failedWindows,
+  onRetryWindow,
+  processedWindows,
+  inProgress,
+}: TimelineProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ c: Concept; x: number } | null>(null);
 
@@ -29,7 +50,9 @@ export function Timeline({ concepts, currentT, durationSec, activeId, onSeek }: 
     }));
   }, [concepts, d]);
 
-  if (!durationSec || concepts.length === 0) return null;
+  const hasFailed = (failedWindows?.length ?? 0) > 0;
+  const hasProcessed = (processedWindows?.length ?? 0) > 0;
+  if (!durationSec || (concepts.length === 0 && !hasFailed && !hasProcessed && !inProgress)) return null;
 
   return (
     <div className="flex-none px-3 pt-2 pb-2">
@@ -54,6 +77,73 @@ export function Timeline({ concepts, currentT, durationSec, activeId, onSeek }: 
             background: 'color-mix(in oklab, var(--color-accent) 20%, transparent)',
           }}
         />
+
+        {/* processed-windows tint — subtle accent bar per successfully-scanned
+            window, so the user sees how far the chunked run has progressed. */}
+        {(processedWindows ?? []).map((w) => {
+          const left = Math.max(0, (w.startSec / d) * 100);
+          const right = Math.min(100, (w.endSec / d) * 100);
+          const width = Math.max(0.3, right - left);
+          return (
+            <div
+              key={`proc-${w.startSec}`}
+              className="absolute top-0 bottom-0 pointer-events-none"
+              style={{
+                left: `${left}%`,
+                width: `${width}%`,
+                background: 'color-mix(in oklab, var(--color-accent) 18%, transparent)',
+                zIndex: 0,
+              }}
+            />
+          );
+        })}
+
+        {/* in-progress shimmer on the not-yet-scanned region, hinting more is
+            coming. Shown only while a chunked run is active. */}
+        {inProgress && hasProcessed && (() => {
+          // Find the rightmost processed endSec, shimmer everything after.
+          const lastEnd = (processedWindows ?? []).reduce(
+            (m, w) => Math.max(m, w.endSec),
+            0,
+          );
+          const left = Math.min(100, (lastEnd / d) * 100);
+          const width = Math.max(0, 100 - left);
+          if (width <= 0.1) return null;
+          return (
+            <div
+              className="absolute top-0 bottom-0 pointer-events-none shimmer rounded-r-full"
+              style={{ left: `${left}%`, width: `${width}%`, opacity: 0.5, zIndex: 0 }}
+            />
+          );
+        })()}
+
+        {/* failed-chunk windows — translucent red bars, click to retry. */}
+        {(failedWindows ?? []).map((w) => {
+          const left = Math.max(0, (w.startSec / d) * 100);
+          const right = Math.min(100, (w.endSec / d) * 100);
+          const width = Math.max(0.5, right - left);
+          return (
+            <button
+              key={`fail-${w.startSec}`}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRetryWindow?.(w);
+              }}
+              title={`Couldn't analyze ${Math.floor(w.startSec / 60)}:${String(Math.floor(w.startSec) % 60).padStart(2, '0')}–${Math.floor(w.endSec / 60)}:${String(Math.floor(w.endSec) % 60).padStart(2, '0')}. Click to retry.`}
+              className="absolute top-0 bottom-0 rounded-sm cursor-pointer transition-opacity hover:opacity-100"
+              style={{
+                left: `${left}%`,
+                width: `${width}%`,
+                background:
+                  'repeating-linear-gradient(45deg, color-mix(in oklab, var(--color-danger) 55%, transparent) 0 4px, color-mix(in oklab, var(--color-danger) 30%, transparent) 4px 8px)',
+                opacity: 0.85,
+                zIndex: 0,
+              }}
+              aria-label="Retry this section"
+            />
+          );
+        })}
 
         {/* concept dots — clamp the left position so dots stay fully
             inside the track at 0% / 100% instead of bleeding off-edge. */}

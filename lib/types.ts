@@ -70,6 +70,11 @@ export interface SurfaceRequest {
   additionalContext?: string;
   videoTitle?: string;
   videoDescription?: string;
+  /** If set, surface concepts only from this window (full transcript still sent as context). */
+  focusWindow?: { startSec: number; endSec: number };
+  /** Prior concepts from sibling chunks — dedup signal only. */
+  priorConcepts?: Array<{ label: string; t: number }>;
+  maxConcepts?: number;
 }
 
 export type BgResponse<T = unknown> =
