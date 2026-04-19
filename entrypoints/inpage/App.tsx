@@ -235,6 +235,7 @@ export function App({ videoId }: AppProps) {
           additionalContext: extraCtx,
           videoTitle: meta.title,
           videoDescription: meta.description,
+          thinkingLevel: prefs.thinkingLevel,
         };
         const resp = await runWithRetry(
           req,
@@ -276,8 +277,27 @@ export function App({ videoId }: AppProps) {
       // snapshot in strict launch order — so the user sees concepts appear
       // chronologically and later chunks still benefit from earlier dedup.
       const total = windows.length;
-      const CONCURRENCY = 3;
-      const LAUNCH_SPACING_MS = 300;
+      const CONCURRENCY = 2;
+      const LAUNCH_SPACING_MS = 1200;
+      // Latched when the React unmount/video-change cleanup fires or the
+      // user clicks Stop. Hoisted so the cooldown waiter can see it.
+      const isBailed = () => cancelled || userCancelledRef.current;
+      // When a 429 fires, every worker that hasn't launched yet waits until
+      // this timestamp before firing its first request. This converts one
+      // worker's rate-limit signal into a pipeline-wide cooldown so we stop
+      // hammering the server while it's asking us to slow down.
+      let rateLimitCooldownUntil = 0;
+      const markRateLimit = () => {
+        // 20s is longer than Gemini's per-minute RPM bucket refill, so one
+        // stall usually clears the burst. We don't parse Retry-After because
+        // Gemini's error bodies don't consistently include it.
+        rateLimitCooldownUntil = Math.max(rateLimitCooldownUntil, Date.now() + 20000);
+      };
+      const waitForCooldown = async () => {
+        while (Date.now() < rateLimitCooldownUntil && !isBailed()) {
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      };
       setSurfaceProgress({ done: 0, total });
       console.log(
         `[gloss/surface] video ${videoId}: duration=${Math.floor(duration)}s, ${windows.length} chunks of ${CHUNK_SEC}s (concurrency=${CONCURRENCY}, spacing=${LAUNCH_SPACING_MS}ms)`,
@@ -333,10 +353,6 @@ export function App({ videoId }: AppProps) {
 
       const inflight = new Set<Promise<void>>();
       let launchedCount = 0;
-      // Latched by either (a) the React unmount/video-change cleanup, or
-      // (b) a user Stop click. Once true, no new UI updates happen — even
-      // from orphan in-flight requests that resolve after we've bailed.
-      const isBailed = () => cancelled || userCancelledRef.current;
       for (let i = 0; i < windows.length; i++) {
         if (isBailed()) break;
         // Throttle launches to stay under RPM and to avoid bursting.
@@ -347,6 +363,9 @@ export function App({ videoId }: AppProps) {
           await Promise.race(inflight);
           if (isBailed()) break;
         }
+        // If a recent request hit 429, pipeline-wide pause before launching.
+        await waitForCooldown();
+        if (isBailed()) break;
         const idx = i;
         const w = windows[idx];
         launchedCount = idx + 1;
@@ -367,9 +386,16 @@ export function App({ videoId }: AppProps) {
           focusWindow: w,
           priorConcepts,
           maxConcepts: 6,
+          thinkingLevel: prefs.thinkingLevel,
         };
         const p = (async () => {
-          const resp = await runWithRetry(req, prefs.geminiApiKey!, 3, isBailed);
+          const resp = await runWithRetry(
+            req,
+            prefs.geminiApiKey!,
+            3,
+            isBailed,
+            markRateLimit,
+          );
           // Drop results that arrive after we've bailed — user has already
           // moved on (cancelled or navigated away).
           if (isBailed()) return;
@@ -444,6 +470,7 @@ export function App({ videoId }: AppProps) {
         focusWindow: w,
         priorConcepts,
         maxConcepts: 6,
+        thinkingLevel: prefs.thinkingLevel,
       };
       setFailedWindows((prev) =>
         prev.filter((x) => x.startSec !== w.startSec || x.endSec !== w.endSec),
@@ -528,6 +555,7 @@ export function App({ videoId }: AppProps) {
           videoTitle: meta.title,
           explainInLang: lang,
           additionalContext: extraCtx,
+          thinkingLevel: prefs.thinkingLevel,
         });
         if (cancelled) return;
         setSummary(res.summary);
@@ -878,6 +906,7 @@ async function runWithRetry(
   apiKey: string,
   maxAttempts: number,
   isCancelled?: () => boolean,
+  onRateLimit?: () => void,
 ): Promise<CallResult<SurfaceResult>> {
   let lastErr = 'Unknown error';
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -888,14 +917,19 @@ async function runWithRetry(
     } catch (e: any) {
       lastErr = String(e?.message ?? e);
     }
+    const isRateLimit = /\b(429|rate limit|quota|resource_exhausted)\b/i.test(lastErr);
+    // Signal a pipeline-wide cooldown so sibling workers don't keep firing
+    // into the same 429 wall. Fires on the first rate-limit hit, not just
+    // the last attempt, because sibling launches happen between attempts.
+    if (isRateLimit) onRateLimit?.();
     if (attempt < maxAttempts - 1) {
       // Exponential backoff with extra wait for rate-limit errors, since the
       // server is asking us to slow down. 1s, 2s, 4s… plus a rate-limit
-      // surcharge. Split the sleep into 100ms polls so user-cancel takes
-      // effect mid-wait instead of after several seconds.
-      const isRateLimit = /\b(429|rate limit|quota|resource_exhausted)\b/i.test(lastErr);
+      // surcharge (15s — long enough for a 60s-bucket refill to have room).
+      // Split the sleep into 100ms polls so user-cancel takes effect
+      // mid-wait instead of after several seconds.
       const base = 1000 * Math.pow(2, attempt);
-      const delay = isRateLimit ? base + 4000 : base;
+      const delay = isRateLimit ? base + 15000 : base;
       const deadline = Date.now() + delay;
       while (Date.now() < deadline) {
         if (isCancelled?.()) return { ok: false, error: 'Cancelled' };

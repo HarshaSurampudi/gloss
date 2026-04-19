@@ -137,6 +137,22 @@ export function Settings({ prefs, onClose, onChange }: SettingsProps) {
             />
           </Field>
 
+          <Field label="Thinking level">
+            <Segmented
+              value={prefs.thinkingLevel}
+              onChange={(v) => onChange({ thinkingLevel: v })}
+              options={[
+                { value: 'MINIMAL', label: 'Minimal' },
+                { value: 'LOW', label: 'Low' },
+                { value: 'MEDIUM', label: 'Medium' },
+                { value: 'HIGH', label: 'High' },
+              ]}
+            />
+            <Helper>
+              Higher levels give the model more room to reason — better quality but slower and more likely to hit rate limits. Minimal is the default.
+            </Helper>
+          </Field>
+
           <Field label="Auto-generate">
             <div className="flex items-center gap-2.5">
               <Toggle

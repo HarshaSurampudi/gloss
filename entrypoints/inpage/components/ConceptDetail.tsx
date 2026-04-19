@@ -130,6 +130,7 @@ export function ConceptDetail({
             fullTranscript,
             difficulty,
           }),
+          thinkingLevel: prefs.thinkingLevel,
         });
         if (cancelled) return;
         setDetailText(result.body);
@@ -189,6 +190,7 @@ export function ConceptDetail({
           ...history.map((m) => ({ role: m.role, parts: [{ text: m.text }] })),
           { role: 'user', parts: [{ text: question }] },
         ],
+        thinkingLevel: prefs.thinkingLevel,
       });
       setAsking(false);
       setQa((prev) => [

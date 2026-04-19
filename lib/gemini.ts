@@ -1,5 +1,11 @@
 import type { Concept, EntityType, TranscriptSegment } from './types';
 
+export type ThinkingLevel = 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH';
+
+function thinkingConfig(level?: ThinkingLevel) {
+  return { thinkingLevel: level ?? 'MINIMAL' };
+}
+
 export interface Msg {
   role: 'user' | 'model';
   text: string;
@@ -35,6 +41,7 @@ export async function surfaceConcepts(opts: {
   priorConcepts?: Array<{ label: string; t: number }>;
   /** Max concepts to return from this call. Default 30 for full-video, ~6 for chunked. */
   maxConcepts?: number;
+  thinkingLevel?: ThinkingLevel;
 }): Promise<{ domain: string; concepts: Concept[] }> {
   const transcript = opts.segments
     .map((s) => `[${Math.floor(s.start)}] ${s.text}`)
@@ -175,9 +182,7 @@ ${priorList}`,
       generationConfig: {
         responseMimeType: 'application/json',
         responseSchema: schema,
-        thinkingConfig: {
-          thinkingLevel: 'MINIMAL',
-        },
+        thinkingConfig: thinkingConfig(opts.thinkingLevel),
       },
     }),
   });
@@ -221,36 +226,9 @@ function slug(s: string): string {
 }
 
 /**
- * Non-streaming text completion from Gemini. Returns the full generated text.
- */
-export async function generateText(opts: {
-  apiKey: string;
-  model: string;
-  systemInstruction: string;
-  contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
-}): Promise<string> {
-  const res = await fetch(`${BASE}/models/${opts.model}:generateContent?key=${opts.apiKey}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: opts.systemInstruction }] },
-      contents: opts.contents,
-      generationConfig: {
-        thinkingConfig: {
-          thinkingLevel: 'MINIMAL',
-        },
-      },
-    }),
-  });
-  if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-}
-
-/**
- * Structured JSON completion. Used for the deep-dive and follow-up calls
- * where we want the model to return multiple fields (body, related ids,
- * suggested follow-ups) in a single response.
+ * Structured JSON completion. Every Gemini inference call in Gloss goes
+ * through this helper — plain-text completions are intentionally not
+ * supported so the model's output is always schema-validated.
  */
 async function generateStructured<T>(opts: {
   apiKey: string;
@@ -258,6 +236,7 @@ async function generateStructured<T>(opts: {
   systemInstruction: string;
   contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
   schema: unknown;
+  thinkingLevel?: ThinkingLevel;
 }): Promise<T> {
   const res = await fetch(`${BASE}/models/${opts.model}:generateContent?key=${opts.apiKey}`, {
     method: 'POST',
@@ -268,7 +247,7 @@ async function generateStructured<T>(opts: {
       generationConfig: {
         responseMimeType: 'application/json',
         responseSchema: opts.schema,
-        thinkingConfig: { thinkingLevel: 'MINIMAL' },
+        thinkingConfig: thinkingConfig(opts.thinkingLevel),
       },
     }),
   });
@@ -297,6 +276,7 @@ export async function generateVideoSummary(opts: {
   videoTitle?: string;
   explainInLang: string;
   additionalContext?: string;
+  thinkingLevel?: ThinkingLevel;
 }): Promise<VideoSummaryResult> {
   const readerLine = opts.additionalContext?.trim()
     ? `YOUR READER (shape the angle to fit this person): ${opts.additionalContext.trim()}`
@@ -352,6 +332,7 @@ Rules:
     systemInstruction: system,
     contents: [{ role: 'user', parts: [{ text: userParts.join('\n') }] }],
     schema,
+    thinkingLevel: opts.thinkingLevel,
   });
 
   // Defensive: drop malformed moments so downstream UI can trust the data.
@@ -382,6 +363,7 @@ export async function generateDeepDive(opts: {
   model: string;
   system: string;
   user: string;
+  thinkingLevel?: ThinkingLevel;
 }): Promise<DeepDiveResult> {
   const schema = {
     type: 'object',
@@ -406,6 +388,7 @@ export async function generateDeepDive(opts: {
     systemInstruction: opts.system,
     contents: [{ role: 'user', parts: [{ text: opts.user }] }],
     schema,
+    thinkingLevel: opts.thinkingLevel,
   });
 }
 
@@ -414,6 +397,7 @@ export async function generateFollowupAnswer(opts: {
   model: string;
   system: string;
   history: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
+  thinkingLevel?: ThinkingLevel;
 }): Promise<FollowupResult> {
   const schema = {
     type: 'object',
@@ -438,6 +422,7 @@ export async function generateFollowupAnswer(opts: {
     systemInstruction: opts.system,
     contents: opts.history,
     schema,
+    thinkingLevel: opts.thinkingLevel,
   });
 }
 

@@ -11,6 +11,7 @@ const DEFAULT_PREFS: Preferences = {
   translateTranscript: false,
   focusMode: false,
   keyMomentsEnabled: false,
+  thinkingLevel: 'MINIMAL',
 };
 
 function runtimeAlive(): boolean {

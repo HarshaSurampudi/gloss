@@ -48,6 +48,9 @@ export interface Preferences {
    *  summary plus 4–8 key moments with timestamps. Rendered in place of
    *  the YouTube video description. Default false — opt-in. */
   keyMomentsEnabled: boolean;
+  /** Gemini thinkingLevel knob. Higher = better quality + more tokens +
+   *  slower + more rate-limit risk. Default MINIMAL. */
+  thinkingLevel: 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
 export interface Note {
@@ -82,6 +85,7 @@ export interface SurfaceParams {
   /** Prior concepts from sibling chunks — dedup signal only. */
   priorConcepts?: Array<{ label: string; t: number }>;
   maxConcepts?: number;
+  thinkingLevel?: 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
 export interface SurfaceResult {
