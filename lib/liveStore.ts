@@ -5,14 +5,31 @@ import type { Concept, TranscriptSegment } from './types';
  * rendered into the fullscreen element's shadow root) can read the same
  * concepts + current time the main panel is working with.
  */
+export type AppStatus =
+  | 'booting'
+  | 'need-key'
+  | 'loading-transcript'
+  | 'idle-manual'
+  | 'surfacing'
+  | 'ready'
+  | 'no-transcript'
+  | 'error';
+
 type State = {
   concepts: Concept[];
   currentT: number;
   activeId: string | null;
   segments: TranscriptSegment[];
+  appStatus: AppStatus;
 };
 
-let state: State = { concepts: [], currentT: 0, activeId: null, segments: [] };
+let state: State = {
+  concepts: [],
+  currentT: 0,
+  activeId: null,
+  segments: [],
+  appStatus: 'booting',
+};
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -36,8 +53,19 @@ export const liveStore = {
     state = { ...state, currentT, activeId };
     emit();
   },
+  setAppStatus(appStatus: AppStatus) {
+    if (state.appStatus === appStatus) return;
+    state = { ...state, appStatus };
+    emit();
+  },
   reset() {
-    state = { concepts: [], currentT: 0, activeId: null, segments: [] };
+    state = {
+      concepts: [],
+      currentT: 0,
+      activeId: null,
+      segments: [],
+      appStatus: 'booting',
+    };
     emit();
   },
   subscribe(cb: () => void): () => void {

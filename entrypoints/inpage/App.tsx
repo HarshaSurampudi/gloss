@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type {
-  BgResponse,
+  CallResult,
   Concept,
   Preferences,
-  SurfaceRequest,
+  SurfaceParams,
   SurfaceResult,
   TranscriptSegment,
 } from '@/lib/types';
@@ -21,7 +21,7 @@ import {
 import { removeProgressMarkers, updateProgressMarkers } from '@/lib/progressMarkers';
 import { readVideoMeta } from '@/lib/videoMeta';
 import { setFocusMode } from '@/lib/focusMode';
-import { takeScreenshot } from '@/lib/screenshot';
+import { surfaceConcepts } from '@/lib/gemini';
 import { Header } from './components/Header';
 import { ConceptsList } from './components/ConceptsList';
 import { CaptionStrip } from './components/CaptionStrip';
@@ -67,6 +67,9 @@ export function App({ videoId }: AppProps) {
   const [failedWindows, setFailedWindows] = useState<Array<{ startSec: number; endSec: number }>>([]);
   const [processedWindows, setProcessedWindows] = useState<Array<{ startSec: number; endSec: number }>>([]);
   const forceRegen = useRef(false);
+  // User-initiated cancel for the in-flight surfacing run. Flipped by the
+  // Stop button; read by the chunking loop.
+  const userCancelledRef = useRef(false);
   /** Per-window concept results, keyed by startSec. Kept so we can re-run merge
    *  after a user-triggered retry of a single failed window. */
   const chunkResultsRef = useRef<Map<number, { concepts: Concept[]; domain: string }>>(new Map());
@@ -168,6 +171,7 @@ export function App({ videoId }: AppProps) {
     const model = prefs.geminiModel;
     const extraCtx = prefs.additionalContext;
     let cancelled = false;
+    userCancelledRef.current = false;
     (async () => {
       const skipCache = forceRegen.current;
       forceRegen.current = false;
@@ -207,8 +211,7 @@ export function App({ videoId }: AppProps) {
       // Short videos: single full-transcript call, no chunking.
       if (windows.length <= 1) {
         setSurfaceProgress({ done: 0, total: 1 });
-        const req: SurfaceRequest = {
-          type: 'surface',
+        const req: SurfaceParams = {
           segments,
           explainInLang: prefs.explainInLang,
           difficulty,
@@ -217,7 +220,7 @@ export function App({ videoId }: AppProps) {
           videoTitle: meta.title,
           videoDescription: meta.description,
         };
-        const resp = await runWithRetry<SurfaceResult>(req, 3);
+        const resp = await runWithRetry(req, prefs.geminiApiKey!, 3);
         if (cancelled) return;
         setSurfaceProgress(null);
         if (!resp.ok) {
@@ -260,7 +263,7 @@ export function App({ videoId }: AppProps) {
       let committedCount = 0;
 
       // Pending results keyed by launch index, committed in order.
-      const pending = new Map<number, { window: { startSec: number; endSec: number }; resp: BgResponse<SurfaceResult> }>();
+      const pending = new Map<number, { window: { startSec: number; endSec: number }; resp: CallResult<SurfaceResult> }>();
       let nextCommitIdx = 0;
       const commitReady = () => {
         while (pending.has(nextCommitIdx)) {
@@ -302,26 +305,30 @@ export function App({ videoId }: AppProps) {
       };
 
       const inflight = new Set<Promise<void>>();
+      let launchedCount = 0;
       for (let i = 0; i < windows.length; i++) {
         if (cancelled) return;
+        if (userCancelledRef.current) break;
         // Throttle launches to stay under RPM and to avoid bursting.
         if (i > 0) await new Promise((r) => setTimeout(r, LAUNCH_SPACING_MS));
         if (cancelled) return;
+        if (userCancelledRef.current) break;
         // If at concurrency cap, wait for any in-flight to settle.
         if (inflight.size >= CONCURRENCY) {
           await Promise.race(inflight);
           if (cancelled) return;
+          if (userCancelledRef.current) break;
         }
         const idx = i;
         const w = windows[idx];
+        launchedCount = idx + 1;
         // Snapshot priors at launch time — reflects everything committed so
         // far, which is a subset of what will eventually be known. Later
         // chunks may miss dedup hints from chunks still in flight, but that's
         // the trade-off for overlap; naive id-dedup on commit catches the
         // obvious duplicates.
         const priorConcepts = accumulated.map((c) => ({ label: c.label, t: c.t }));
-        const req: SurfaceRequest = {
-          type: 'surface',
+        const req: SurfaceParams = {
           segments,
           explainInLang: prefs.explainInLang,
           difficulty,
@@ -334,7 +341,7 @@ export function App({ videoId }: AppProps) {
           maxConcepts: 6,
         };
         const p = (async () => {
-          const resp = await runWithRetry<SurfaceResult>(req, 3);
+          const resp = await runWithRetry(req, prefs.geminiApiKey!, 3);
           if (cancelled) return;
           pending.set(idx, { window: w, resp });
           commitReady();
@@ -342,23 +349,33 @@ export function App({ videoId }: AppProps) {
         inflight.add(p);
         p.finally(() => inflight.delete(p));
       }
-      // Drain.
+      // Drain. (Even on user-cancel we wait for in-flight to settle so their
+      // commits land; no new launches happen.)
       while (inflight.size > 0 && !cancelled) {
         await Promise.race(inflight);
       }
       if (cancelled) return;
       setSurfaceProgress(null);
 
+      const wasCancelled = userCancelledRef.current;
+      userCancelledRef.current = false;
+
       if (accumulated.length === 0) {
-        setError(failed.length > 0 ? 'All chunks failed' : 'No concepts found');
+        if (wasCancelled) {
+          // User stopped before anything landed — drop back to manual idle.
+          setStatus('idle-manual');
+          return;
+        }
+        setError(failed.length > 0 ? 'Could not analyze this video — please try again.' : 'No concepts found');
         setStatus('error');
         return;
       }
 
       setStatus('ready');
-      // Cache only when every window succeeded — partial results would be
-      // confusingly incomplete on a future cache hit.
-      if (failed.length === 0) {
+      // Cache only when the full run completed without failures or a user
+      // cancel — partial results would be confusingly incomplete on a future
+      // cache hit.
+      if (!wasCancelled && failed.length === 0 && launchedCount === windows.length) {
         setCachedConcepts(
           videoId,
           prefs.explainInLang,
@@ -385,8 +402,7 @@ export function App({ videoId }: AppProps) {
       const meta = readVideoMeta();
       // Pass concepts already in the UI as prior-dedup signal.
       const priorConcepts = concepts.map((c) => ({ label: c.label, t: c.t }));
-      const req: SurfaceRequest = {
-        type: 'surface',
+      const req: SurfaceParams = {
         segments,
         explainInLang: ctx.lang,
         difficulty: ctx.difficulty,
@@ -401,7 +417,8 @@ export function App({ videoId }: AppProps) {
       setFailedWindows((prev) =>
         prev.filter((x) => x.startSec !== w.startSec || x.endSec !== w.endSec),
       );
-      const resp = await runWithRetry<SurfaceResult>(req, 3);
+      if (!prefs.geminiApiKey) return;
+      const resp = await runWithRetry(req, prefs.geminiApiKey, 3);
       if (!resp.ok) {
         setFailedWindows((prev) =>
           prev.some((x) => x.startSec === w.startSec && x.endSec === w.endSec)
@@ -511,19 +528,6 @@ export function App({ videoId }: AppProps) {
     [videoId],
   );
 
-  const doScreenshot = useCallback(
-    (e: MouseEvent | KeyboardEvent) => {
-      if (!prefs) return;
-      const def = prefs.screenshotAction ?? 'clipboard';
-      const shift = 'shiftKey' in e && e.shiftKey;
-      const action = shift ? (def === 'clipboard' ? 'download' : 'clipboard') : def;
-      takeScreenshot(action).catch((err) => {
-        console.warn('[gloss/screenshot]', err);
-      });
-    },
-    [prefs?.screenshotAction],
-  );
-
   const saveConceptToNotes = useCallback(
     async (c: Concept) => {
       const body = c.description ? `${c.label}\n\n${c.description}` : c.label;
@@ -542,6 +546,11 @@ export function App({ videoId }: AppProps) {
   useEffect(() => { liveStore.setConcepts(concepts); }, [concepts]);
   useEffect(() => { liveStore.setSegments(segments); }, [segments]);
   useEffect(() => { liveStore.setCurrent(currentT, activeConceptId); }, [currentT, activeConceptId]);
+  useEffect(() => {
+    // Map App.Status → liveStore.AppStatus. 'loading-prefs' is transient and
+    // reads as 'booting' to the overlay.
+    liveStore.setAppStatus(status === 'loading-prefs' ? 'booting' : status);
+  }, [status]);
 
   // Inject markers on YouTube's progress bar for each concept.
   useEffect(() => {
@@ -595,6 +604,10 @@ export function App({ videoId }: AppProps) {
     setStatus('surfacing');
   }, [prefs?.geminiApiKey, segments.length]);
 
+  const cancelSurfacing = useCallback(() => {
+    userCancelledRef.current = true;
+  }, []);
+
   if (status === 'loading-prefs' || !prefs) {
     return <Shell><Center muted>Loading…</Center></Shell>;
   }
@@ -629,12 +642,10 @@ export function App({ videoId }: AppProps) {
         onToggleFocus={() => setPrefs({ focusMode: !prefs.focusMode })}
         notesOpen={notesOpen}
         onToggleNotes={() => setNotesOpen((v) => !v)}
-        onScreenshot={doScreenshot}
-        screenshotAction={prefs.screenshotAction ?? 'clipboard'}
       />
       {status === 'loading-transcript' && <LoadingBody phase="transcript" progress={null} />}
       {status === 'surfacing' && concepts.length === 0 && (
-        <LoadingBody phase="surfacing" progress={surfaceProgress} />
+        <LoadingBody phase="surfacing" progress={surfaceProgress} onCancel={cancelSurfacing} />
       )}
       {status === 'idle-manual' && (
         <IdleManual
@@ -670,7 +681,7 @@ export function App({ videoId }: AppProps) {
         ) : (
           <>
             {status === 'surfacing' && surfaceProgress && (
-              <SurfacingBanner progress={surfaceProgress} />
+              <SurfacingBanner progress={surfaceProgress} onCancel={cancelSurfacing} />
             )}
             <CaptionStrip
               segments={segments}
@@ -697,6 +708,7 @@ export function App({ videoId }: AppProps) {
               activeId={activeConceptId}
               currentT={currentT}
               filter={filter}
+              videoId={videoId}
               onSeek={seek}
               onOpenDetail={(c) => setDetailId(c.id)}
               onSaveToNotes={saveConceptToNotes}
@@ -718,25 +730,16 @@ export function App({ videoId }: AppProps) {
   );
 }
 
-async function runWithRetry<T>(
-  req: SurfaceRequest,
+async function runWithRetry(
+  params: SurfaceParams,
+  apiKey: string,
   maxAttempts: number,
-): Promise<BgResponse<T>> {
+): Promise<CallResult<SurfaceResult>> {
   let lastErr = 'Unknown error';
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      if (!chrome.runtime?.id) return { ok: false, error: 'Extension context invalidated — reload this tab.' };
-      const resp = await new Promise<BgResponse<T>>((resolve) => {
-        chrome.runtime.sendMessage(req, (r: BgResponse<T>) => {
-          if (chrome.runtime.lastError) {
-            resolve({ ok: false, error: chrome.runtime.lastError.message || 'Extension error' });
-            return;
-          }
-          resolve(r ?? { ok: false, error: 'Empty response' });
-        });
-      });
-      if (resp.ok) return resp;
-      lastErr = resp.error;
+      const data = await surfaceConcepts({ apiKey, ...params });
+      return { ok: true, data };
     } catch (e: any) {
       lastErr = String(e?.message ?? e);
     }
@@ -753,7 +756,13 @@ async function runWithRetry<T>(
   return { ok: false, error: lastErr };
 }
 
-function SurfacingBanner({ progress }: { progress: { done: number; total: number } }) {
+function SurfacingBanner({
+  progress,
+  onCancel,
+}: {
+  progress: { done: number; total: number };
+  onCancel?: () => void;
+}) {
   const pct = (progress.done / Math.max(1, progress.total)) * 100;
   return (
     <div className="flex-none px-3 pt-2">
@@ -775,7 +784,7 @@ function SurfacingBanner({ progress }: { progress: { done: number; total: number
           {Math.round((progress.done / Math.max(1, progress.total)) * 100)}%
         </span>
         <div
-          className="ml-auto h-1 flex-1 max-w-[120px] rounded-full overflow-hidden"
+          className="ml-auto h-1 flex-1 max-w-[100px] rounded-full overflow-hidden"
           style={{ background: 'var(--color-border-subtle)' }}
         >
           <div
@@ -786,6 +795,16 @@ function SurfacingBanner({ progress }: { progress: { done: number; total: number
             }}
           />
         </div>
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            title="Stop finding more concepts"
+            className="flex-none inline-flex items-center h-[20px] px-2 rounded-md text-[10.5px] font-medium text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)] transition-colors"
+          >
+            Stop
+          </button>
+        )}
       </div>
     </div>
   );
@@ -879,9 +898,11 @@ function IdleManual({
 function LoadingBody({
   phase,
   progress,
+  onCancel,
 }: {
   phase: 'transcript' | 'surfacing';
   progress: { done: number; total: number } | null;
+  onCancel?: () => void;
 }) {
   const isChunked = phase === 'surfacing' && progress !== null && progress.total > 1;
   const pct = progress ? (progress.done / Math.max(1, progress.total)) * 100 : null;
@@ -915,6 +936,16 @@ function LoadingBody({
             <div className="text-[10.5px] font-mono tabular-nums text-[var(--color-fg-subtle)]">
               {Math.round(pct)}%
             </div>
+          )}
+          {phase === 'surfacing' && onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              title="Stop finding more concepts"
+              className="flex-none inline-flex items-center h-[20px] px-2 rounded-md text-[10.5px] font-medium text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)] transition-colors"
+            >
+              Stop
+            </button>
           )}
         </div>
         <div className="text-[11px] text-[var(--color-fg-muted)] leading-relaxed mb-2">

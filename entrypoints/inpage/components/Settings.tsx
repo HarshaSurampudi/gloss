@@ -80,28 +80,6 @@ export function Settings({ prefs, onClose, onChange }: SettingsProps) {
           </div>
         </Field>
 
-        <Field label="Screenshot action">
-          <div className="grid grid-cols-2 gap-1.5">
-            {(['clipboard', 'download'] as const).map((a) => (
-              <button
-                type="button"
-                key={a}
-                onClick={() => onChange({ screenshotAction: a })}
-                className={`h-8 rounded-md text-[11.5px] font-medium capitalize border ${
-                  prefs.screenshotAction === a
-                    ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)] border-[color-mix(in_oklab,var(--color-accent)_40%,transparent)]'
-                    : 'bg-[var(--color-surface)] text-[var(--color-fg-muted)] border-[var(--color-border)]'
-                }`}
-              >
-                {a === 'clipboard' ? 'Copy to clipboard' : 'Download'}
-              </button>
-            ))}
-          </div>
-          <div className="mt-1.5 text-[10.5px] text-[var(--color-fg-subtle)] leading-relaxed">
-            The camera button in the video's control bar uses this action. Shift+click swaps it for the other option.
-          </div>
-        </Field>
-
 {/*
           ─── Transcript translation (disabled) ─────────────────────────
           Didn't work reliably enough to ship. Kept intact so re-enabling

@@ -44,8 +44,6 @@ export interface Preferences {
   /** Hides YouTube's comments, recommendations, Shorts shelves, and end-
    *  screen cards while watching. Default false. */
   focusMode: boolean;
-  /** Default action when the player-bar screenshot button is clicked. */
-  screenshotAction: 'clipboard' | 'download';
 }
 
 export interface Note {
@@ -61,8 +59,8 @@ export interface Note {
   updatedAt: number;
 }
 
-export interface SurfaceRequest {
-  type: 'surface';
+/** Parameters for a concept-surfacing call. */
+export interface SurfaceParams {
   segments: TranscriptSegment[];
   explainInLang: string;
   difficulty: string;
@@ -77,39 +75,9 @@ export interface SurfaceRequest {
   maxConcepts?: number;
 }
 
-export type BgResponse<T = unknown> =
-  | { ok: true; data: T }
-  | { ok: false; error: string };
-
 export interface SurfaceResult {
   domain: string;
   concepts: Concept[];
 }
 
-export interface DetailRequest {
-  type: 'detail';
-  concept: Concept;
-  segments: TranscriptSegment[];
-  videoTitle?: string;
-  videoDescription?: string;
-  explainInLang: string;
-  difficulty: string;
-  model: string;
-  additionalContext?: string;
-}
-
-export interface ScreenshotRequest {
-  type: 'screenshot';
-}
-
-export interface FollowupRequest {
-  type: 'followup';
-  concept: Concept;
-  detailText: string;
-  history: { role: 'user' | 'model'; text: string }[];
-  question: string;
-  videoTitle?: string;
-  explainInLang: string;
-  model: string;
-  additionalContext?: string;
-}
+export type CallResult<T> = { ok: true; data: T } | { ok: false; error: string };

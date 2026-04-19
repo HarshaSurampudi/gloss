@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { liveStore } from '@/lib/liveStore';
+import type { AppStatus } from '@/lib/liveStore';
 import type { Concept } from '@/lib/types';
 import { chipColorVar, chipLabel, formatTime } from './utils';
 import { TypeIcon } from './components/TypeIcon';
@@ -245,7 +246,7 @@ export function FullscreenOverlay() {
             )}
           </div>
         ) : (
-          <div className="fs-caption-hint">Waiting for the next concept…</div>
+          <EmptyBodyMessage status={state.appStatus} />
         )}
       </div>
 
@@ -271,5 +272,38 @@ export function FullscreenOverlay() {
       </div>
     </div>
   );
+}
+
+function EmptyBodyMessage({ status }: { status: AppStatus }) {
+  switch (status) {
+    case 'need-key':
+      return (
+        <div className="fs-caption-hint">
+          <strong>Set your Gemini API key</strong> in the Gloss panel (bottom of the video page, next to Up Next) to start seeing concepts here.
+        </div>
+      );
+    case 'booting':
+    case 'loading-transcript':
+      return <div className="fs-caption-hint">Setting things up…</div>;
+    case 'idle-manual':
+      return (
+        <div className="fs-caption-hint">
+          Open the Gloss panel and click <strong>Generate concepts</strong> to begin.
+        </div>
+      );
+    case 'surfacing':
+      return <div className="fs-caption-hint">Finding concepts…</div>;
+    case 'no-transcript':
+      return <div className="fs-caption-hint">No transcript available for this video.</div>;
+    case 'error':
+      return (
+        <div className="fs-caption-hint">
+          Something went wrong. See the Gloss panel below the video.
+        </div>
+      );
+    case 'ready':
+    default:
+      return <div className="fs-caption-hint">Waiting for the next concept…</div>;
+  }
 }
 

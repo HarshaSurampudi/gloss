@@ -6,11 +6,10 @@ const DEFAULT_PREFS: Preferences = {
   explainInLang: 'en',
   difficulty: 'auto',
   theme: 'auto',
-  geminiModel: 'gemini-flash-lite-latest',
+  geminiModel: 'gemini-flash-latest',
   autoGenerate: true,
   translateTranscript: false,
   focusMode: false,
-  screenshotAction: 'clipboard',
 };
 
 function runtimeAlive(): boolean {

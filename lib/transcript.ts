@@ -70,6 +70,12 @@ async function tryWithStolenPoToken(
     }
 
     const track = pickTrack(tracks, preferLang);
+
+    // If a pre-roll ad is playing, YouTube's CC button targets the ad — our
+    // PoToken steal relies on the main video's /api/timedtext request, which
+    // won't fire until the ad is done. Wait it out.
+    await waitForAdsToFinish();
+
     const pot = await stealPoToken();
     if (!pot) {
       log('could not steal PoToken');
@@ -291,6 +297,37 @@ function findByLabel(pattern: RegExp): HTMLElement | null {
 
 function wait(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
+}
+
+function isAdPlaying(): boolean {
+  const mp = document.getElementById('movie_player');
+  if (!mp) return false;
+  return (
+    mp.classList.contains('ad-showing') ||
+    mp.classList.contains('ad-interrupting')
+  );
+}
+
+/**
+ * If YouTube is currently running a pre-roll or mid-roll ad, hold off on the
+ * CC-button steal until the ad ends. Times out after 90s so a broken ad-break
+ * never strands transcript fetching forever — we'll fall through to the DOM
+ * panel in that case.
+ */
+async function waitForAdsToFinish(timeoutMs = 90_000): Promise<void> {
+  if (!isAdPlaying()) return;
+  log('ad is playing — waiting for it to finish before fetching transcript');
+  const start = Date.now();
+  while (isAdPlaying() && Date.now() - start < timeoutMs) {
+    await wait(500);
+  }
+  if (isAdPlaying()) {
+    log('gave up waiting for ad after', timeoutMs, 'ms');
+    return;
+  }
+  // Small grace period for the main video's player state to settle after the
+  // ad ends (CC button reattaches, tracks re-register).
+  await wait(400);
 }
 
 function parseTimestamp(s: string): number {

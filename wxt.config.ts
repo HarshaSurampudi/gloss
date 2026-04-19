@@ -7,8 +7,7 @@ export default defineConfig({
   manifest: {
     name: 'Gloss',
     description: 'Explain anything in any YouTube video.',
-    permissions: ['storage', 'activeTab', 'scripting'],
-    host_permissions: ['<all_urls>'],
+    permissions: ['storage'],
     action: {
       default_title: 'Gloss',
     },

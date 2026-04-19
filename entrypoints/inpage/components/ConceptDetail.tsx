@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type {
-  BgResponse,
-  Concept,
-  DetailRequest,
-  FollowupRequest,
-  Preferences,
-  TranscriptSegment,
-} from '@/lib/types';
+import type { Concept, Preferences, TranscriptSegment } from '@/lib/types';
 import { getCachedDetail, setCachedDetail } from '@/lib/cache';
 import { readVideoMeta } from '@/lib/videoMeta';
+import {
+  buildDetailSystem,
+  buildDetailUserContent,
+  buildFollowupSystem,
+  generateText,
+} from '@/lib/gemini';
 import { chipColorVar, chipLabel, formatTime } from '../utils';
 import { TypeIcon } from './TypeIcon';
 
@@ -64,37 +63,46 @@ export function ConceptDetail({
         setDetailStatus('ready');
         return;
       }
+      if (!prefs.geminiApiKey) {
+        setDetailError('No API key set.');
+        setDetailStatus('error');
+        return;
+      }
       const meta = readVideoMeta();
-      const req: DetailRequest = {
-        type: 'detail',
-        concept,
-        segments,
-        explainInLang: prefs.explainInLang,
-        difficulty,
-        model: prefs.geminiModel,
-        additionalContext: prefs.additionalContext,
-        videoTitle: meta.title,
-        videoDescription: meta.description,
-      };
+      const fullTranscript = segments
+        .map((s) => `[${Math.floor(s.start)}] ${s.text}`)
+        .join('\n');
       try {
-        if (!chrome.runtime?.id) throw new Error('Extension context invalidated — reload tab.');
-        chrome.runtime.sendMessage(req, (resp: BgResponse<string>) => {
-          if (cancelled) return;
-          if (chrome.runtime.lastError) {
-            setDetailError(chrome.runtime.lastError.message || 'Extension error');
-            setDetailStatus('error');
-            return;
-          }
-          if (!resp?.ok) {
-            setDetailError(resp?.error || 'Gemini call failed');
-            setDetailStatus('error');
-            return;
-          }
-          setDetailText(resp.data);
-          setDetailStatus('ready');
-          setCachedDetail(videoId, concept.id, prefs.explainInLang, prefs.geminiModel, resp.data);
+        const text = await generateText({
+          apiKey: prefs.geminiApiKey,
+          model: prefs.geminiModel,
+          systemInstruction: buildDetailSystem({
+            explainInLang: prefs.explainInLang,
+            additionalContext: prefs.additionalContext,
+          }),
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: buildDetailUserContent({
+                    concept,
+                    videoTitle: meta.title,
+                    videoDescription: meta.description,
+                    fullTranscript,
+                    difficulty,
+                  }),
+                },
+              ],
+            },
+          ],
         });
+        if (cancelled) return;
+        setDetailText(text);
+        setDetailStatus('ready');
+        setCachedDetail(videoId, concept.id, prefs.explainInLang, prefs.geminiModel, text);
       } catch (e: any) {
+        if (cancelled) return;
         setDetailError(String(e?.message ?? e));
         setDetailStatus('error');
       }
@@ -105,39 +113,38 @@ export function ConceptDetail({
     };
   }, [videoId, concept.id, prefs.explainInLang, prefs.geminiModel]);
 
-  const sendFollowup = () => {
+  const sendFollowup = async () => {
     const q = question.trim();
     if (!q || asking || detailStatus !== 'ready') return;
+    if (!prefs.geminiApiKey) {
+      setQaError('No API key set.');
+      return;
+    }
     const history = qa.slice();
     setQa([...qa, { role: 'user', text: q }]);
     setQuestion('');
     setAsking(true);
     setQaError(null);
 
-    const req: FollowupRequest = {
-      type: 'followup',
-      concept,
-      detailText,
-      history,
-      question: q,
-      explainInLang: prefs.explainInLang,
-      model: prefs.geminiModel,
-      additionalContext: prefs.additionalContext,
-    };
     try {
-      if (!chrome.runtime?.id) throw new Error('Extension context invalidated — reload tab.');
-      chrome.runtime.sendMessage(req, (resp: BgResponse<string>) => {
-        setAsking(false);
-        if (chrome.runtime.lastError) {
-          setQaError(chrome.runtime.lastError.message || 'Extension error');
-          return;
-        }
-        if (!resp?.ok) {
-          setQaError(resp?.error || 'Gemini call failed');
-          return;
-        }
-        setQa((prev) => [...prev, { role: 'model', text: resp.data }]);
+      const priming = `Deep-dive context you previously wrote about this concept:\n\n${detailText}\n\n(This is background — answer the user's follow-up question below.)`;
+      const text = await generateText({
+        apiKey: prefs.geminiApiKey,
+        model: prefs.geminiModel,
+        systemInstruction: buildFollowupSystem({
+          concept,
+          explainInLang: prefs.explainInLang,
+          additionalContext: prefs.additionalContext,
+        }),
+        contents: [
+          { role: 'user', parts: [{ text: priming }] },
+          { role: 'model', parts: [{ text: 'Understood. What would you like to know?' }] },
+          ...history.map((m) => ({ role: m.role, parts: [{ text: m.text }] })),
+          { role: 'user', parts: [{ text: q }] },
+        ],
       });
+      setAsking(false);
+      setQa((prev) => [...prev, { role: 'model', text }]);
     } catch (e: any) {
       setAsking(false);
       setQaError(String(e?.message ?? e));

@@ -217,6 +217,13 @@ body {
   animation: slide-lr 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }

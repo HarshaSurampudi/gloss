@@ -188,34 +188,16 @@ ${priorList}`,
     (c) => typeof c.timestampSec === 'number' && isFinite(c.timestampSec),
   );
 
-  // Enforce focus-window timestamp rule: concepts anchored outside the window
-  // are the model breaking the focus rule (it grabbed them from the full
-  // transcript we included as context). Drop them and warn, so the merge pass
-  // never sees out-of-window data.
+  // Enforce focus-window timestamp rule: silently drop concepts anchored
+  // outside the window (the model grabbed them from the background transcript
+  // we included for context). We don't retry or surface this to the user —
+  // it's noise, not an error.
   let filtered = raw;
   if (opts.focusWindow) {
     const { startSec, endSec } = opts.focusWindow;
-    const inWindow: RawSurfaceTerm[] = [];
-    const outOfWindow: RawSurfaceTerm[] = [];
-    for (const c of raw) {
-      if (c.timestampSec >= startSec && c.timestampSec < endSec) inWindow.push(c);
-      else outOfWindow.push(c);
-    }
-    if (outOfWindow.length > 0) {
-      console.warn(
-        `[gloss/gemini] focus window ${Math.floor(startSec)}-${Math.floor(endSec)}s: model returned ${outOfWindow.length} out-of-window concept(s), dropping:`,
-        outOfWindow.map((c) => `${Math.floor(c.timestampSec)}s ${c.label}`),
-      );
-    }
-    filtered = inWindow;
-    // Treat "model ignored the focus rule entirely" as a failure — caller's
-    // retry logic will give it another shot, and if it keeps happening the
-    // chunk gets marked failed (red bar in UI).
-    if (inWindow.length === 0 && outOfWindow.length > 0) {
-      throw new Error(
-        `Model returned ${outOfWindow.length} concept(s) but none inside the focus window ${Math.floor(startSec)}-${Math.floor(endSec)}s — ignored the focus rule.`,
-      );
-    }
+    filtered = raw.filter(
+      (c) => c.timestampSec >= startSec && c.timestampSec < endSec,
+    );
   }
 
   const concepts: Concept[] = filtered

@@ -128,7 +128,6 @@ export interface GeminiModel {
  * models without us shipping an update.
  */
 export const GEMINI_MODELS: GeminiModel[] = [
-  { id: 'gemini-flash-lite-latest', name: 'Flash-Lite', hint: 'Fastest · free tier friendly' },
   { id: 'gemini-flash-latest', name: 'Flash', hint: 'Balanced speed & quality' },
   { id: 'gemini-pro-latest', name: 'Pro', hint: 'Deepest explanations' },
 ];
