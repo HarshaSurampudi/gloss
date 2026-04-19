@@ -21,7 +21,12 @@ import {
 import { removeProgressMarkers, updateProgressMarkers } from '@/lib/progressMarkers';
 import { readVideoMeta } from '@/lib/videoMeta';
 import { setFocusMode } from '@/lib/focusMode';
-import { surfaceConcepts } from '@/lib/gemini';
+import { generateVideoSummary, surfaceConcepts } from '@/lib/gemini';
+import type { KeyMoment } from '@/lib/gemini';
+import { getCachedSummary, setCachedSummary } from '@/lib/cache';
+import { GlossLogo } from './components/GlossLogo';
+import { Tabs } from './components/Tabs';
+import type { TabKey } from './components/Tabs';
 import { Header } from './components/Header';
 import { ConceptsList } from './components/ConceptsList';
 import { CaptionStrip } from './components/CaptionStrip';
@@ -61,11 +66,20 @@ export function App({ videoId }: AppProps) {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [translatedTexts, setTranslatedTexts] = useState<string[] | null>(null);
   const [translating, setTranslating] = useState(false);
-  const [notesOpen, setNotesOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabKey>('concepts');
   const [notes, setNotes] = useState<Note[]>([]);
   const [surfaceProgress, setSurfaceProgress] = useState<{ done: number; total: number } | null>(null);
   const [failedWindows, setFailedWindows] = useState<Array<{ startSec: number; endSec: number }>>([]);
   const [processedWindows, setProcessedWindows] = useState<Array<{ startSec: number; endSec: number }>>([]);
+  // True between user-click-Stop and the surfacing loop actually exiting. The
+  // banner reads this to show "Stopping…" instead of the progress label.
+  const [stopping, setStopping] = useState(false);
+
+  // Video summary + key moments (optional, pref-gated).
+  const [summary, setSummary] = useState('');
+  const [keyMoments, setKeyMoments] = useState<KeyMoment[]>([]);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
   const forceRegen = useRef(false);
   // User-initiated cancel for the in-flight surfacing run. Flipped by the
   // Stop button; read by the chunking loop.
@@ -208,6 +222,8 @@ export function App({ videoId }: AppProps) {
       setFailedWindows([]);
       setProcessedWindows([]);
 
+      setStopping(false);
+
       // Short videos: single full-transcript call, no chunking.
       if (windows.length <= 1) {
         setSurfaceProgress({ done: 0, total: 1 });
@@ -220,8 +236,19 @@ export function App({ videoId }: AppProps) {
           videoTitle: meta.title,
           videoDescription: meta.description,
         };
-        const resp = await runWithRetry(req, prefs.geminiApiKey!, 3);
-        if (cancelled) return;
+        const resp = await runWithRetry(
+          req,
+          prefs.geminiApiKey!,
+          3,
+          () => cancelled || userCancelledRef.current,
+        );
+        if (cancelled || userCancelledRef.current) {
+          userCancelledRef.current = false;
+          setSurfaceProgress(null);
+          setStopping(false);
+          setStatus('idle-manual');
+          return;
+        }
         setSurfaceProgress(null);
         if (!resp.ok) {
           setError(resp.error);
@@ -306,18 +333,19 @@ export function App({ videoId }: AppProps) {
 
       const inflight = new Set<Promise<void>>();
       let launchedCount = 0;
+      // Latched by either (a) the React unmount/video-change cleanup, or
+      // (b) a user Stop click. Once true, no new UI updates happen — even
+      // from orphan in-flight requests that resolve after we've bailed.
+      const isBailed = () => cancelled || userCancelledRef.current;
       for (let i = 0; i < windows.length; i++) {
-        if (cancelled) return;
-        if (userCancelledRef.current) break;
+        if (isBailed()) break;
         // Throttle launches to stay under RPM and to avoid bursting.
         if (i > 0) await new Promise((r) => setTimeout(r, LAUNCH_SPACING_MS));
-        if (cancelled) return;
-        if (userCancelledRef.current) break;
+        if (isBailed()) break;
         // If at concurrency cap, wait for any in-flight to settle.
         if (inflight.size >= CONCURRENCY) {
           await Promise.race(inflight);
-          if (cancelled) return;
-          if (userCancelledRef.current) break;
+          if (isBailed()) break;
         }
         const idx = i;
         const w = windows[idx];
@@ -341,41 +369,44 @@ export function App({ videoId }: AppProps) {
           maxConcepts: 6,
         };
         const p = (async () => {
-          const resp = await runWithRetry(req, prefs.geminiApiKey!, 3);
-          if (cancelled) return;
+          const resp = await runWithRetry(req, prefs.geminiApiKey!, 3, isBailed);
+          // Drop results that arrive after we've bailed — user has already
+          // moved on (cancelled or navigated away).
+          if (isBailed()) return;
           pending.set(idx, { window: w, resp });
           commitReady();
         })();
         inflight.add(p);
         p.finally(() => inflight.delete(p));
       }
-      // Drain. (Even on user-cancel we wait for in-flight to settle so their
-      // commits land; no new launches happen.)
-      while (inflight.size > 0 && !cancelled) {
+
+      // Drain in-flight requests, but bail immediately if the user clicks
+      // Stop mid-drain. Orphan requests will complete in the background
+      // without touching state (isBailed() is checked in their commit
+      // handler too).
+      while (inflight.size > 0 && !isBailed()) {
         await Promise.race(inflight);
       }
       if (cancelled) return;
-      setSurfaceProgress(null);
 
-      const wasCancelled = userCancelledRef.current;
-      userCancelledRef.current = false;
+      setSurfaceProgress(null);
+      setStopping(false);
+
+      if (userCancelledRef.current) {
+        userCancelledRef.current = false;
+        setStatus(accumulated.length > 0 ? 'ready' : 'idle-manual');
+        return;
+      }
 
       if (accumulated.length === 0) {
-        if (wasCancelled) {
-          // User stopped before anything landed — drop back to manual idle.
-          setStatus('idle-manual');
-          return;
-        }
         setError(failed.length > 0 ? 'Could not analyze this video — please try again.' : 'No concepts found');
         setStatus('error');
         return;
       }
 
       setStatus('ready');
-      // Cache only when the full run completed without failures or a user
-      // cancel — partial results would be confusingly incomplete on a future
-      // cache hit.
-      if (!wasCancelled && failed.length === 0 && launchedCount === windows.length) {
+      // Cache only when the full run completed without failures.
+      if (failed.length === 0 && launchedCount === windows.length) {
         setCachedConcepts(
           videoId,
           prefs.explainInLang,
@@ -455,6 +486,73 @@ export function App({ videoId }: AppProps) {
     [videoId, segments, prefs, concepts, domain],
   );
 
+  // Summary + key moments (optional). Fires once transcript is loaded and
+  // the pref is on. Cached per (video, lang, model, context).
+  useEffect(() => {
+    if (!prefs?.keyMomentsEnabled) {
+      // Pref turned off — clear any stale state so it doesn't linger.
+      setSummary('');
+      setKeyMoments([]);
+      setSummaryLoading(false);
+      setSummaryError(null);
+      return;
+    }
+    if (!prefs.geminiApiKey || segments.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const lang = prefs.explainInLang;
+      const model = prefs.geminiModel;
+      const extraCtx = prefs.additionalContext;
+      const cached = await getCachedSummary(videoId, lang, model, extraCtx);
+      if (cancelled) return;
+      if (cached) {
+        setSummary(cached.summary);
+        setKeyMoments(cached.keyMoments);
+        setSummaryLoading(false);
+        setSummaryError(null);
+        return;
+      }
+
+      setSummaryLoading(true);
+      setSummaryError(null);
+      try {
+        const meta = readVideoMeta();
+        const transcript = segments
+          .map((s) => `[${Math.floor(s.start)}] ${s.text}`)
+          .join('\n');
+        const res = await generateVideoSummary({
+          apiKey: prefs.geminiApiKey!,
+          model,
+          transcript,
+          videoTitle: meta.title,
+          explainInLang: lang,
+          additionalContext: extraCtx,
+        });
+        if (cancelled) return;
+        setSummary(res.summary);
+        setKeyMoments(res.keyMoments);
+        setSummaryLoading(false);
+        setCachedSummary(videoId, lang, model, extraCtx, res.summary, res.keyMoments);
+      } catch (e: any) {
+        if (cancelled) return;
+        setSummaryError(String(e?.message ?? e));
+        setSummaryLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    videoId,
+    segments,
+    prefs?.keyMomentsEnabled,
+    prefs?.geminiApiKey,
+    prefs?.geminiModel,
+    prefs?.explainInLang,
+    prefs?.additionalContext,
+  ]);
+
   // Esc returns from detail view.
   useEffect(() => {
     if (!detailId) return;
@@ -519,8 +617,13 @@ export function App({ videoId }: AppProps) {
   }, [videoId]);
 
   const saveNote = useCallback(
-    async (t: number, text: string, segmentText?: string): Promise<Note> => {
-      const note = await addNote(videoId, t, text, segmentText);
+    async (
+      t: number,
+      text: string,
+      segmentText?: string,
+      link?: { conceptId?: string; conceptLabel?: string },
+    ): Promise<Note> => {
+      const note = await addNote(videoId, t, text, segmentText, link);
       const n = await listNotes(videoId);
       setNotes(n);
       return note;
@@ -530,9 +633,11 @@ export function App({ videoId }: AppProps) {
 
   const saveConceptToNotes = useCallback(
     async (c: Concept) => {
-      const body = c.description ? `${c.label}\n\n${c.description}` : c.label;
-      await saveNote(c.t, body);
-      setNotesOpen(true);
+      await saveNote(c.t, c.description ?? '', undefined, {
+        conceptId: c.id,
+        conceptLabel: c.label,
+      });
+      setActiveTab('notes');
     },
     [saveNote],
   );
@@ -551,6 +656,19 @@ export function App({ videoId }: AppProps) {
     // reads as 'booting' to the overlay.
     liveStore.setAppStatus(status === 'loading-prefs' ? 'booting' : status);
   }, [status]);
+
+  // Push summary + key-moments state to the shared store so the description-
+  // area mount (rendered into YouTube's DOM, outside our panel's shadow
+  // tree) can read it without prop drilling across Preact roots.
+  useEffect(() => {
+    liveStore.setSummary({
+      summary,
+      keyMoments,
+      summaryLoading,
+      summaryError,
+      summaryEnabled: !!prefs?.keyMomentsEnabled,
+    });
+  }, [summary, keyMoments, summaryLoading, summaryError, prefs?.keyMomentsEnabled]);
 
   // Inject markers on YouTube's progress bar for each concept.
   useEffect(() => {
@@ -606,6 +724,7 @@ export function App({ videoId }: AppProps) {
 
   const cancelSurfacing = useCallback(() => {
     userCancelledRef.current = true;
+    setStopping(true);
   }, []);
 
   if (status === 'loading-prefs' || !prefs) {
@@ -616,8 +735,8 @@ export function App({ videoId }: AppProps) {
     return (
       <Shell>
         <OnboardKey
-          onSave={async (key) => {
-            const p = await setPrefs({ geminiApiKey: key });
+          onSave={async (patch) => {
+            const p = await setPrefs(patch);
             setPrefsState(p);
             setStatus('loading-transcript');
           }}
@@ -630,8 +749,6 @@ export function App({ videoId }: AppProps) {
     <Shell>
       <Header
         domain={domain}
-        conceptCount={concepts.length}
-        notesCount={notes.length}
         filter={filter}
         onFilter={setFilter}
         onSettings={() => setSettingsOpen(true)}
@@ -640,48 +757,54 @@ export function App({ videoId }: AppProps) {
         canRegenerate={status === 'ready' || status === 'error'}
         focusMode={!!prefs.focusMode}
         onToggleFocus={() => setPrefs({ focusMode: !prefs.focusMode })}
-        notesOpen={notesOpen}
-        onToggleNotes={() => setNotesOpen((v) => !v)}
       />
-      {status === 'loading-transcript' && <LoadingBody phase="transcript" progress={null} />}
-      {status === 'surfacing' && concepts.length === 0 && (
-        <LoadingBody phase="surfacing" progress={surfaceProgress} onCancel={cancelSurfacing} />
+      {status === 'loading-transcript' && (
+        <>
+          <GeneratingBanner phase="transcript" progress={null} />
+          <SkeletonCards />
+        </>
       )}
-      {status === 'idle-manual' && (
-        <IdleManual
+      {status === 'surfacing' && concepts.length === 0 && (
+        <>
+          <GeneratingBanner
+            phase="surfacing"
+            progress={surfaceProgress}
+            onCancel={cancelSurfacing}
+            stopping={stopping}
+          />
+          <SkeletonCards />
+        </>
+      )}
+      {(status === 'idle-manual' ||
+        status === 'no-transcript' ||
+        status === 'error') && (
+        <PreGenerationView
+          status={status}
+          error={error}
           onGenerate={generateNow}
-          segments={segments}
-          currentT={currentT}
-          onSeek={seek}
+          canGenerate={segments.length > 0}
         />
       )}
-      {status === 'no-transcript' && <Center muted>No transcript available for this video.</Center>}
-      {status === 'error' && <ErrorBody message={error ?? 'Something went wrong.'} />}
       {(status === 'ready' || (status === 'surfacing' && concepts.length > 0)) && (
         detailId ? (
           <ConceptDetail
             videoId={videoId}
             concept={concepts.find((c) => c.id === detailId) ?? concepts[0]}
             segments={segments}
+            allConcepts={concepts}
             prefs={prefs}
             onBack={() => setDetailId(null)}
             onSeek={seek}
-          />
-        ) : notesOpen ? (
-          <NotesList
-            videoId={videoId}
-            notes={notes}
-            currentT={currentT}
-            onSeek={seek}
-            onNewNote={async () => {
-              await saveNote(currentT, '');
-            }}
-            onBack={() => setNotesOpen(false)}
+            onNavigate={(id) => setDetailId(id)}
           />
         ) : (
           <>
             {status === 'surfacing' && surfaceProgress && (
-              <SurfacingBanner progress={surfaceProgress} onCancel={cancelSurfacing} />
+              <GeneratingBanner
+                phase="surfacing"
+                progress={surfaceProgress}
+                onCancel={cancelSurfacing}
+              />
             )}
             <CaptionStrip
               segments={segments}
@@ -692,27 +815,47 @@ export function App({ videoId }: AppProps) {
               translatedTexts={translatedTexts}
               translating={translating}
             />
-            <Timeline
-              concepts={concepts}
-              currentT={currentT}
-              durationSec={getVideo()?.duration ?? 0}
-              activeId={activeConceptId}
-              onSeek={seek}
-              failedWindows={failedWindows}
-              onRetryWindow={retryWindow}
-              processedWindows={processedWindows}
-              inProgress={status === 'surfacing'}
+            <Tabs
+              active={activeTab}
+              onChange={setActiveTab}
+              conceptCount={concepts.length}
+              notesCount={notes.length}
             />
-            <ConceptsList
-              concepts={concepts}
-              activeId={activeConceptId}
-              currentT={currentT}
-              filter={filter}
-              videoId={videoId}
-              onSeek={seek}
-              onOpenDetail={(c) => setDetailId(c.id)}
-              onSaveToNotes={saveConceptToNotes}
-            />
+            {activeTab === 'concepts' ? (
+              <>
+                <Timeline
+                  concepts={concepts}
+                  currentT={currentT}
+                  durationSec={getVideo()?.duration ?? 0}
+                  activeId={activeConceptId}
+                  onSeek={seek}
+                  failedWindows={failedWindows}
+                  onRetryWindow={retryWindow}
+                  processedWindows={processedWindows}
+                  inProgress={status === 'surfacing'}
+                />
+                <ConceptsList
+                  concepts={concepts}
+                  activeId={activeConceptId}
+                  currentT={currentT}
+                  filter={filter}
+                  videoId={videoId}
+                  onSeek={seek}
+                  onOpenDetail={(c) => setDetailId(c.id)}
+                  onSaveToNotes={saveConceptToNotes}
+                />
+              </>
+            ) : (
+              <NotesList
+                videoId={videoId}
+                notes={notes}
+                currentT={currentT}
+                onSeek={seek}
+                onNewNote={async () => {
+                  await saveNote(currentT, '');
+                }}
+              />
+            )}
           </>
         )
       )}
@@ -734,9 +877,11 @@ async function runWithRetry(
   params: SurfaceParams,
   apiKey: string,
   maxAttempts: number,
+  isCancelled?: () => boolean,
 ): Promise<CallResult<SurfaceResult>> {
   let lastErr = 'Unknown error';
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (isCancelled?.()) return { ok: false, error: 'Cancelled' };
     try {
       const data = await surfaceConcepts({ apiKey, ...params });
       return { ok: true, data };
@@ -746,69 +891,21 @@ async function runWithRetry(
     if (attempt < maxAttempts - 1) {
       // Exponential backoff with extra wait for rate-limit errors, since the
       // server is asking us to slow down. 1s, 2s, 4s… plus a rate-limit
-      // surcharge.
+      // surcharge. Split the sleep into 100ms polls so user-cancel takes
+      // effect mid-wait instead of after several seconds.
       const isRateLimit = /\b(429|rate limit|quota|resource_exhausted)\b/i.test(lastErr);
       const base = 1000 * Math.pow(2, attempt);
       const delay = isRateLimit ? base + 4000 : base;
-      await new Promise((r) => setTimeout(r, delay));
+      const deadline = Date.now() + delay;
+      while (Date.now() < deadline) {
+        if (isCancelled?.()) return { ok: false, error: 'Cancelled' };
+        await new Promise((r) => setTimeout(r, Math.min(100, deadline - Date.now())));
+      }
     }
   }
   return { ok: false, error: lastErr };
 }
 
-function SurfacingBanner({
-  progress,
-  onCancel,
-}: {
-  progress: { done: number; total: number };
-  onCancel?: () => void;
-}) {
-  const pct = (progress.done / Math.max(1, progress.total)) * 100;
-  return (
-    <div className="flex-none px-3 pt-2">
-      <div
-        className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[11px]"
-        style={{
-          background: 'color-mix(in oklab, var(--color-accent) 8%, transparent)',
-          border: '1px solid color-mix(in oklab, var(--color-accent) 25%, transparent)',
-        }}
-      >
-        <span
-          className="inline-block w-1.5 h-1.5 rounded-full anim-breathe flex-none"
-          style={{ background: 'var(--color-accent)' }}
-        />
-        <span className="text-[var(--color-fg)] font-medium">
-          Finding concepts
-        </span>
-        <span className="text-[var(--color-fg-muted)] tabular-nums">
-          {Math.round((progress.done / Math.max(1, progress.total)) * 100)}%
-        </span>
-        <div
-          className="ml-auto h-1 flex-1 max-w-[100px] rounded-full overflow-hidden"
-          style={{ background: 'var(--color-border-subtle)' }}
-        >
-          <div
-            className="h-full transition-all duration-500 ease-out"
-            style={{
-              width: `${Math.max(4, pct)}%`,
-              background: 'var(--color-accent)',
-            }}
-          />
-        </div>
-        {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            title="Stop finding more concepts"
-            className="flex-none inline-flex items-center h-[20px] px-2 rounded-md text-[10.5px] font-medium text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)] transition-colors"
-          >
-            Stop
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function Shell({ children }: { children: preact.ComponentChildren }) {
   return <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-fg)]">{children}</div>;
@@ -822,185 +919,326 @@ function Center({ children, muted }: { children: preact.ComponentChildren; muted
   );
 }
 
-function IdleManual({
+/**
+ * Empty / error / no-transcript state. Shown before generation starts,
+ * after a failed run, or when the video has no captions. Explains what the
+ * app does, offers a primary Generate action (unless we know it won't help,
+ * e.g. no transcript), and lists common reasons something might have gone
+ * wrong.
+ */
+function PreGenerationView({
+  status,
+  error,
   onGenerate,
-  segments,
-  currentT,
-  onSeek,
+  canGenerate,
 }: {
+  status: 'idle-manual' | 'no-transcript' | 'error';
+  error: string | null;
   onGenerate: () => void;
-  segments: TranscriptSegment[];
-  currentT: number;
-  onSeek: (t: number) => void;
+  canGenerate: boolean;
 }) {
-  return (
-    <>
-      <CaptionStrip segments={segments} currentT={currentT} onSeek={onSeek} />
-      <div className="flex-1 flex flex-col items-center justify-center px-5 text-center">
-        <div
-          className="w-12 h-12 rounded-xl inline-flex items-center justify-center mb-3"
-          style={{
-            background: 'color-mix(in oklab, var(--color-accent) 12%, transparent)',
-            color: 'var(--color-accent)',
-          }}
-        >
-          <svg
-            width="22"
-            height="22"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.75"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
-            <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
-          </svg>
-        </div>
-        <div className="text-[14px] font-semibold text-[var(--color-fg)] mb-1">
-          Ready when you are
-        </div>
-        <div className="text-[12px] text-[var(--color-fg-muted)] leading-relaxed max-w-[260px] mb-4">
-          Auto-generate is off. Click to identify and explain concepts in this video.
-        </div>
-        <button
-          type="button"
-          onClick={onGenerate}
-          className="inline-flex items-center gap-1.5 h-9 px-4 rounded-md text-[12.5px] font-semibold"
-          style={{
-            background: 'var(--color-accent)',
-            color: 'var(--color-accent-fg)',
-          }}
-        >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8" />
-          </svg>
-          Generate concepts
-        </button>
-        <div className="mt-3 text-[10.5px] text-[var(--color-fg-subtle)]">
-          Change this default in Settings.
-        </div>
-      </div>
-    </>
-  );
-}
+  const title =
+    status === 'idle-manual'
+      ? 'Nothing to gloss yet.'
+      : status === 'no-transcript'
+      ? "Can't read this video."
+      : 'Something went wrong.';
 
-function LoadingBody({
-  phase,
-  progress,
-  onCancel,
-}: {
-  phase: 'transcript' | 'surfacing';
-  progress: { done: number; total: number } | null;
-  onCancel?: () => void;
-}) {
-  const isChunked = phase === 'surfacing' && progress !== null && progress.total > 1;
-  const pct = progress ? (progress.done / Math.max(1, progress.total)) * 100 : null;
+  const description =
+    status === 'idle-manual'
+      ? 'Gloss pulls a transcript from this video, then asks Gemini to surface concepts, jargon, people, places and tools worth knowing. Takes about a minute for short clips, longer for full-length talks.'
+      : status === 'no-transcript'
+      ? "Gloss needs captions to work. This video doesn't expose any — YouTube may not have auto-generated them yet, or the creator has them disabled."
+      : error ||
+        'The last run ended early. Try again — it usually works on the second attempt.';
 
-  const label =
-    phase === 'transcript'
-      ? 'Reading transcript'
-      : isChunked
-      ? `Finding concepts · ${Math.round(pct!)}%`
-      : 'Finding concepts';
-
-  const helper =
-    phase === 'transcript'
-      ? 'Pulling captions from YouTube.'
-      : isChunked
-      ? 'Longer videos take a bit — concepts will start appearing shortly.'
-      : 'Analyzing the video. Usually 10–20 seconds — feel free to start watching.';
+  const showGenerate = status !== 'no-transcript' && canGenerate;
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex-none px-3 pt-3 pb-3 border-b border-[var(--color-border-subtle)]">
-        <div className="flex items-center gap-2 mb-1.5">
-          <span
-            className="inline-block w-2 h-2 rounded-full anim-breathe"
-            style={{ background: 'var(--color-accent)' }}
-          />
-          <div className="text-[12px] font-semibold text-[var(--color-fg)] flex-1 truncate">
-            {label}
-          </div>
-          {pct !== null && isChunked && (
-            <div className="text-[10.5px] font-mono tabular-nums text-[var(--color-fg-subtle)]">
-              {Math.round(pct)}%
-            </div>
-          )}
-          {phase === 'surfacing' && onCancel && (
-            <button
-              type="button"
-              onClick={onCancel}
-              title="Stop finding more concepts"
-              className="flex-none inline-flex items-center h-[20px] px-2 rounded-md text-[10.5px] font-medium text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)] transition-colors"
+    <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="px-5 pt-6 pb-4">
+        <GlossLogo size={64} />
+        <h2
+          className="mt-5 text-[var(--color-fg)]"
+          style={{
+            fontFamily: '"Source Serif 4", Georgia, serif',
+            fontSize: 24,
+            fontWeight: 500,
+            letterSpacing: '-0.01em',
+            lineHeight: 1.2,
+          }}
+        >
+          {title}
+        </h2>
+        <p
+          className="mt-2.5 text-[var(--color-fg-muted)]"
+          style={{ fontSize: 13, lineHeight: 1.55 }}
+        >
+          {description}
+        </p>
+        {showGenerate && (
+          <button
+            type="button"
+            onClick={onGenerate}
+            className="mt-4 inline-flex items-center gap-1.5 transition-opacity hover:opacity-90"
+            style={{
+              background: 'var(--color-accent)',
+              color: 'var(--color-accent-fg)',
+              fontSize: 13,
+              fontWeight: 600,
+              height: 36,
+              padding: '0 16px',
+              borderRadius: 8,
+            }}
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             >
-              Stop
-            </button>
-          )}
-        </div>
-        <div className="text-[11px] text-[var(--color-fg-muted)] leading-relaxed mb-2">
-          {helper}
-        </div>
-        {/* Determinate bar when we know the total; otherwise an indeterminate shimmer. */}
-        <div
-          className="h-1 rounded-full overflow-hidden"
-          style={{ background: 'var(--color-border-subtle)' }}
-        >
-          {pct !== null ? (
-            <div
-              className="h-full transition-all duration-500 ease-out"
-              style={{
-                width: `${Math.max(4, pct)}%`,
-                background: 'var(--color-accent)',
-              }}
-            />
-          ) : (
-            <div
-              className="h-full anim-slide"
-              style={{
-                width: '35%',
-                background:
-                  'linear-gradient(90deg, transparent, var(--color-accent), transparent)',
-              }}
-            />
-          )}
-        </div>
+              <path d="M20 6L9 17l-5-5" />
+            </svg>
+            {status === 'error' ? 'Try again' : 'Generate gloss'}
+          </button>
+        )}
       </div>
-      <div className="flex-1 overflow-hidden px-2 pt-2 space-y-2">
-        {[92, 78, 86, 70, 80, 64].map((w, i) => (
-          <div
-            key={i}
-            className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-3 space-y-2"
-            style={{ opacity: 1 - i * 0.08 }}
-          >
-            <div className="flex gap-2 items-center">
-              <div className="h-3 w-14 rounded shimmer" />
-              <div className="h-3 w-10 rounded shimmer ml-auto" />
-            </div>
-            <div className="h-3.5 rounded shimmer" style={{ width: w + '%' }} />
-            <div className="h-2.5 rounded shimmer" style={{ width: Math.max(30, w - 20) + '%' }} />
-          </div>
-        ))}
+
+      <div className="mx-5 border-t border-[var(--color-border-subtle)]" />
+
+      <div className="px-5 pt-4 pb-6">
+        <div
+          className="mb-2.5 uppercase font-semibold text-[var(--color-fg-subtle)]"
+          style={{ fontSize: 10.5, letterSpacing: '0.14em' }}
+        >
+          Common reasons
+        </div>
+        <div className="space-y-2">
+          <ReasonCard
+            title="No captions available"
+            body="Gloss needs a transcript. Turn on auto-captions in YouTube, or use a video that has them."
+          />
+          <ReasonCard
+            title="Age-restricted or private"
+            body="YouTube blocks transcript access for some videos."
+          />
+          <ReasonCard
+            title="Auto-generate is off"
+            body="Flip it on in Settings, or press Generate above."
+          />
+        </div>
       </div>
     </div>
   );
 }
 
-function ErrorBody({ message }: { message: string }) {
+function ReasonCard({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex-1 p-4 flex flex-col items-center justify-center text-center">
-      <div className="text-[13px] font-semibold text-[var(--color-danger)] mb-1">Something went wrong</div>
-      <div className="text-[12px] text-[var(--color-fg-muted)] max-w-[280px] leading-relaxed">{message}</div>
+    <div
+      className="rounded-lg px-3 py-2.5"
+      style={{
+        background: 'var(--color-surface)',
+        border: '1px solid var(--color-border-subtle)',
+      }}
+    >
+      <div
+        className="text-[var(--color-fg)]"
+        style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 3 }}
+      >
+        {title}
+      </div>
+      <div
+        className="text-[var(--color-fg-muted)]"
+        style={{ fontSize: 11.5, lineHeight: 1.5 }}
+      >
+        {body}
+      </div>
+    </div>
+  );
+}
+
+
+/**
+ * Compact branded banner shown during the transcript-fetch and concept-
+ * surfacing phases. Sits at the top of the panel so concepts can stream in
+ * beneath it; also doubles as the empty-state banner when no concept has
+ * landed yet (paired with SkeletonCards below).
+ */
+function GeneratingBanner({
+  phase,
+  progress,
+  onCancel,
+  stopping,
+}: {
+  phase: 'transcript' | 'surfacing';
+  progress: { done: number; total: number } | null;
+  onCancel?: () => void;
+  stopping?: boolean;
+}) {
+  const hue = 275; // matches --accent
+  const isChunked = phase === 'surfacing' && progress !== null && progress.total > 1;
+  const pct =
+    isChunked && progress
+      ? Math.round(((progress.done + 0.5) / progress.total) * 100)
+      : null;
+  const eyebrow = stopping
+    ? 'Stopping…'
+    : phase === 'transcript'
+    ? 'Reading transcript'
+    : 'Generating gloss';
+
+  return (
+    <div className="flex-none px-3 pt-2">
+      <div
+        className="relative overflow-hidden"
+        style={{
+          padding: '10px 12px 11px',
+          borderRadius: 10,
+          background: `linear-gradient(135deg, oklch(16% 0.05 ${hue}) 0%, oklch(10% 0.02 ${hue}) 100%)`,
+          border: `1px solid oklch(28% 0.08 ${hue})`,
+        }}
+      >
+        {/* Sweeping shimmer across the card. */}
+        <div
+          className="pointer-events-none absolute inset-0 anim-gloss-shimmer"
+          style={{
+            background: `linear-gradient(90deg, transparent 0%, oklch(75% 0.12 ${hue} / 0.08) 50%, transparent 100%)`,
+          }}
+        />
+
+        <div className="relative flex items-center gap-2.5">
+          <SpinningOrb hue={hue} size={18} />
+          <div
+            className="font-bold uppercase flex-1 min-w-0 truncate"
+            style={{
+              fontSize: 9.5,
+              letterSpacing: '0.18em',
+              color: `oklch(80% 0.14 ${hue})`,
+            }}
+          >
+            {eyebrow}
+          </div>
+          {pct !== null ? (
+            <div
+              className="tabular-nums"
+              style={{
+                fontSize: 20,
+                fontWeight: 500,
+                color: '#f5f2ff',
+                fontFamily: '"Source Serif 4", Georgia, serif',
+                letterSpacing: '-0.02em',
+                lineHeight: 1,
+              }}
+            >
+              {pct}
+              <span style={{ fontSize: 12, color: '#8b87a3', marginLeft: 1 }}>%</span>
+            </div>
+          ) : null}
+          {onCancel && phase === 'surfacing' && (
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={stopping}
+              title={stopping ? 'Stopping…' : 'Stop finding more concepts'}
+              className="flex-none inline-flex items-center transition-colors"
+              style={{
+                fontSize: 10.5,
+                fontWeight: 500,
+                height: 20,
+                padding: '0 8px',
+                borderRadius: 999,
+                color: stopping ? '#8b87a3' : '#c9c5dd',
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.08)',
+                cursor: stopping ? 'default' : 'pointer',
+                opacity: stopping ? 0.6 : 1,
+              }}
+            >
+              {stopping ? 'Stopping…' : 'Stop'}
+            </button>
+          )}
+        </div>
+
+        <div
+          className="relative overflow-hidden"
+          style={{
+            marginTop: 8,
+            height: 3,
+            borderRadius: 2,
+            background: 'rgba(255,255,255,0.06)',
+          }}
+        >
+          {pct !== null ? (
+            <div
+              className="absolute left-0 top-0 bottom-0"
+              style={{
+                width: `${Math.max(2, pct)}%`,
+                background: `linear-gradient(90deg, oklch(55% 0.2 ${hue}), oklch(72% 0.18 ${hue}))`,
+                borderRadius: 2,
+                transition: 'width 500ms ease',
+              }}
+            />
+          ) : (
+            <div
+              className="absolute top-0 bottom-0 anim-slide"
+              style={{
+                width: '35%',
+                background: `linear-gradient(90deg, transparent, oklch(72% 0.18 ${hue}), transparent)`,
+              }}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SkeletonCards() {
+  return (
+    <div className="flex-1 overflow-hidden px-2 pt-2 space-y-2">
+      {[92, 78, 86, 70, 80, 64].map((w, i) => (
+        <div
+          key={i}
+          className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-3 space-y-2"
+          style={{ opacity: 1 - i * 0.08 }}
+        >
+          <div className="flex gap-2 items-center">
+            <div className="h-3 w-14 rounded shimmer" />
+            <div className="h-3 w-10 rounded shimmer ml-auto" />
+          </div>
+          <div className="h-3.5 rounded shimmer" style={{ width: w + '%' }} />
+          <div className="h-2.5 rounded shimmer" style={{ width: Math.max(30, w - 20) + '%' }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SpinningOrb({ hue, size = 28 }: { hue: number; size?: number }) {
+  const inset = Math.max(2, Math.round(size / 9));
+  return (
+    <div
+      className="relative flex-none anim-gloss-spin"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        background: `conic-gradient(from 0deg, oklch(80% 0.2 ${hue}), oklch(30% 0.08 ${hue}) 40%, oklch(30% 0.08 ${hue}))`,
+      }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          inset,
+          borderRadius: '50%',
+          background: `radial-gradient(circle at 35% 35%, oklch(85% 0.2 ${hue}), oklch(18% 0.06 ${hue}))`,
+          boxShadow: `0 0 ${Math.round(size * 0.4)}px oklch(70% 0.2 ${hue} / 0.4)`,
+        }}
+      />
     </div>
   );
 }

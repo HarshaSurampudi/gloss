@@ -1,4 +1,5 @@
 import type { Concept, TranscriptSegment } from './types';
+import type { KeyMoment } from './gemini';
 
 /**
  * Local per-video cache. Keeps transcripts and surfaced concepts in
@@ -16,8 +17,9 @@ const MAX_ENTRIES = 80;
  */
 const TRANSCRIPT_VERSION = 1;
 const CONCEPTS_VERSION = 6; // bumped: sequential chunked surfacing + tightened focus-window prompt
-const DETAIL_VERSION = 2;   // bumped: elevated additionalContext to primary directive
+const DETAIL_VERSION = 4;   // bumped: detail now returns structured {body, relatedConceptIds, followupPrompts}
 const TRANSLATION_VERSION = 1;
+const SUMMARY_VERSION = 1;
 
 interface TranscriptEntry {
   v: number;
@@ -51,15 +53,31 @@ interface TranslationEntry {
   t: number;
 }
 
+interface SummaryEntry {
+  v: number;
+  summary: string;
+  keyMoments: KeyMoment[];
+  lang: string;
+  model: string;
+  t: number;
+}
+
 interface CacheShape {
   transcripts: Record<string, TranscriptEntry>;
   concepts: Record<string, ConceptsEntry>;
   details: Record<string, DetailEntry>;
   translations: Record<string, TranslationEntry>;
+  summaries: Record<string, SummaryEntry>;
 }
 
 function empty(): CacheShape {
-  return { transcripts: {}, concepts: {}, details: {}, translations: {} };
+  return {
+    transcripts: {},
+    concepts: {},
+    details: {},
+    translations: {},
+    summaries: {},
+  };
 }
 
 async function read(): Promise<CacheShape> {
@@ -253,6 +271,54 @@ export async function setCachedTranslation(
     t: Date.now(),
   };
   prune(c.translations);
+  await write(c);
+}
+
+function summaryKey(
+  videoId: string,
+  lang: string,
+  model: string,
+  contextHash: string,
+): string {
+  return `${videoId}::${lang}::${model}::${contextHash}`;
+}
+
+export async function getCachedSummary(
+  videoId: string,
+  lang: string,
+  model: string,
+  additionalContext?: string,
+): Promise<{ summary: string; keyMoments: KeyMoment[] } | null> {
+  const c = await read();
+  const key = summaryKey(videoId, lang, model, hashContext(additionalContext));
+  const e = c.summaries?.[key];
+  if (!e || e.v !== SUMMARY_VERSION) return null;
+  e.t = Date.now();
+  c.summaries[key] = e;
+  await write(c);
+  return { summary: e.summary, keyMoments: e.keyMoments };
+}
+
+export async function setCachedSummary(
+  videoId: string,
+  lang: string,
+  model: string,
+  additionalContext: string | undefined,
+  summary: string,
+  keyMoments: KeyMoment[],
+): Promise<void> {
+  const c = await read();
+  c.summaries = c.summaries ?? {};
+  const key = summaryKey(videoId, lang, model, hashContext(additionalContext));
+  c.summaries[key] = {
+    v: SUMMARY_VERSION,
+    summary,
+    keyMoments,
+    lang,
+    model,
+    t: Date.now(),
+  };
+  prune(c.summaries);
   await write(c);
 }
 

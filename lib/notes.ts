@@ -45,6 +45,7 @@ export async function addNote(
   t: number,
   text: string,
   segmentText?: string,
+  link?: { conceptId?: string; conceptLabel?: string },
 ): Promise<Note> {
   const s = await read();
   const now = Date.now();
@@ -54,6 +55,8 @@ export async function addNote(
     t,
     text,
     segmentText,
+    conceptId: link?.conceptId,
+    conceptLabel: link?.conceptLabel,
     createdAt: now,
     updatedAt: now,
   };

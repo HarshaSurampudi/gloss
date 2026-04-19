@@ -44,6 +44,10 @@ export interface Preferences {
   /** Hides YouTube's comments, recommendations, Shorts shelves, and end-
    *  screen cards while watching. Default false. */
   focusMode: boolean;
+  /** When true, Gloss runs an extra Gemini call to produce a short video
+   *  summary plus 4–8 key moments with timestamps. Rendered in place of
+   *  the YouTube video description. Default false — opt-in. */
+  keyMomentsEnabled: boolean;
 }
 
 export interface Note {
@@ -55,6 +59,11 @@ export interface Note {
   text: string;
   /** Snapshot of the transcript line at that moment, for context. */
   segmentText?: string;
+  /** If this note was saved from a concept card, the originating concept id. */
+  conceptId?: string;
+  /** Display label for the linked concept (cached so notes remain readable
+   *  even after concepts are regenerated and ids change). */
+  conceptLabel?: string;
   createdAt: number;
   updatedAt: number;
 }

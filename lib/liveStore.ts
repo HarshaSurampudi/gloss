@@ -1,4 +1,5 @@
 import type { Concept, TranscriptSegment } from './types';
+import type { KeyMoment } from './gemini';
 
 /**
  * Tiny shared store so the fullscreen overlay (a separate Preact tree
@@ -21,6 +22,11 @@ type State = {
   activeId: string | null;
   segments: TranscriptSegment[];
   appStatus: AppStatus;
+  summary: string;
+  keyMoments: KeyMoment[];
+  summaryEnabled: boolean;
+  summaryLoading: boolean;
+  summaryError: string | null;
 };
 
 let state: State = {
@@ -29,6 +35,11 @@ let state: State = {
   activeId: null,
   segments: [],
   appStatus: 'booting',
+  summary: '',
+  keyMoments: [],
+  summaryEnabled: false,
+  summaryLoading: false,
+  summaryError: null,
 };
 const listeners = new Set<() => void>();
 
@@ -58,6 +69,16 @@ export const liveStore = {
     state = { ...state, appStatus };
     emit();
   },
+  setSummary(patch: {
+    summary?: string;
+    keyMoments?: KeyMoment[];
+    summaryEnabled?: boolean;
+    summaryLoading?: boolean;
+    summaryError?: string | null;
+  }) {
+    state = { ...state, ...patch };
+    emit();
+  },
   reset() {
     state = {
       concepts: [],
@@ -65,6 +86,11 @@ export const liveStore = {
       activeId: null,
       segments: [],
       appStatus: 'booting',
+      summary: '',
+      keyMoments: [],
+      summaryEnabled: false,
+      summaryLoading: false,
+      summaryError: null,
     };
     emit();
   },

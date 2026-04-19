@@ -1,6 +1,8 @@
 import { render } from 'preact';
+import { useEffect, useState } from 'preact/hooks';
 import { App } from './App';
 import { FullscreenOverlay } from './FullscreenOverlay';
+import { SummarySection } from './components/SummarySection';
 import { liveStore } from '@/lib/liveStore';
 import sheet from '@/assets/styles.css?inline';
 import fullscreenSheet from '@/assets/fullscreen.css?inline';
@@ -59,6 +61,7 @@ export async function mountInPage(): Promise<void> {
   matchVideoPlayerHeight(container);
   trapKeystrokes(container);
   installFullscreenOverlay();
+  installDescriptionPanel();
   lastVideoId = videoId;
   render(<App videoId={videoId} />, root);
 }
@@ -177,6 +180,135 @@ function installFullscreenOverlay() {
   });
 
   sync();
+}
+
+// ─────────────────────── Description-area summary panel ───────────────────────
+// When the `keyMomentsEnabled` pref is on AND we have generated content,
+// replace YouTube's own video-description block with a Gloss "Summary +
+// Key Moments" card. Shares state with the main panel via liveStore.
+
+const DESC_CONTAINER_ID = 'gloss-desc-container';
+const DESC_HIDE_STYLE_ID = 'gloss-desc-hide-style';
+let descriptionInstalled = false;
+
+function installDescriptionPanel() {
+  if (descriptionInstalled) return;
+  descriptionInstalled = true;
+
+  let host: HTMLElement | null = null;
+
+  const ensureMount = () => {
+    if (host && document.body.contains(host)) return host;
+    const desc =
+      document.querySelector<HTMLElement>('ytd-watch-metadata #description') ||
+      document.querySelector<HTMLElement>('ytd-watch-metadata ytd-text-inline-expander');
+    if (!desc || !desc.parentElement) return null;
+
+    host = document.createElement('div');
+    host.id = DESC_CONTAINER_ID;
+    host.style.display = 'block';
+    host.style.margin = '12px 0';
+    // Override the shared :host rule in styles.css which forces a fixed
+    // ~52vh height + overflow:hidden (that rule is for the main panel).
+    host.style.height = 'auto';
+    host.style.maxHeight = 'none';
+    host.style.overflow = 'visible';
+    host.style.border = 'none';
+    host.style.borderRadius = '0';
+    desc.parentElement.insertBefore(host, desc);
+
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = sheet as string;
+    shadow.appendChild(style);
+
+    const root = document.createElement('div');
+    shadow.appendChild(root);
+
+    syncYouTubeTheme(host);
+    render(<DescriptionPanel />, root);
+    return host;
+  };
+
+  const applyHideStyle = (on: boolean) => {
+    const existing = document.getElementById(DESC_HIDE_STYLE_ID);
+    if (!on) {
+      existing?.remove();
+      return;
+    }
+    if (existing) return;
+    const style = document.createElement('style');
+    style.id = DESC_HIDE_STYLE_ID;
+    // Hide YouTube's own description card; we render our own above it.
+    style.textContent = `
+      ytd-watch-metadata #description,
+      ytd-watch-metadata ytd-text-inline-expander {
+        display: none !important;
+      }
+    `;
+    document.head.appendChild(style);
+  };
+
+  // React to store updates: (re-)insert the host when pref is on and we
+  // have something to show, remove it otherwise.
+  const apply = () => {
+    const s = liveStore.getState();
+    const active = s.summaryEnabled;
+    if (active) {
+      ensureMount();
+      applyHideStyle(true);
+    } else {
+      if (host && host.parentElement) host.parentElement.removeChild(host);
+      host = null;
+      applyHideStyle(false);
+    }
+  };
+
+  apply();
+  liveStore.subscribe(apply);
+
+  // YouTube re-renders watch-metadata on SPA navigation; re-apply on nav.
+  window.addEventListener('yt-page-data-updated', apply);
+  window.addEventListener('yt-navigate-finished', apply);
+  // Watch for late-loading description element on first nav.
+  const obs = new MutationObserver(() => apply());
+  obs.observe(document.body, { childList: true, subtree: true });
+}
+
+function DescriptionPanel() {
+  const [state, setState] = useState(() => liveStore.getState());
+  useEffect(() => liveStore.subscribe(() => setState(liveStore.getState())), []);
+  if (!state.summaryEnabled) return null;
+
+  const seek = (t: number) => {
+    const v = document.querySelector<HTMLVideoElement>('video.html5-main-video');
+    if (!v) return;
+    v.currentTime = t;
+    if (v.paused) v.play().catch(() => {});
+  };
+
+  return (
+    <div
+      className="theme-dark"
+      style={{
+        background: 'var(--color-bg)',
+        color: 'var(--color-fg)',
+        border: '1px solid var(--color-border)',
+        borderRadius: 12,
+        maxHeight: 420,
+        overflowY: 'auto',
+        fontFamily: 'var(--font-sans)',
+      }}
+    >
+      <SummarySection
+        summary={state.summary}
+        keyMoments={state.keyMoments}
+        loading={state.summaryLoading}
+        error={state.summaryError}
+        onSeek={seek}
+      />
+    </div>
+  );
 }
 
 /**

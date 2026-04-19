@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { GlossLogo } from './GlossLogo';
+// NOTE: Search and focus-mode tools are hidden to declutter the header.
+// Code kept around (commented) so re-enabling is one block edit. When
+// un-commenting, also re-import { useEffect, useRef, useState } from
+// 'preact/hooks' at the top.
 
 interface HeaderProps {
   domain: string | null;
-  conceptCount: number;
-  notesCount: number;
   filter: string;
   onFilter: (s: string) => void;
   onSettings: () => void;
@@ -12,25 +14,20 @@ interface HeaderProps {
   canRegenerate: boolean;
   focusMode: boolean;
   onToggleFocus: () => void;
-  notesOpen: boolean;
-  onToggleNotes: () => void;
 }
 
 export function Header({
   domain,
-  conceptCount,
-  notesCount,
-  filter,
-  onFilter,
+  // filter,
+  // onFilter,
   onSettings,
   onRegenerate,
   regenerating,
   canRegenerate,
-  focusMode,
-  onToggleFocus,
-  notesOpen,
-  onToggleNotes,
+  // focusMode,
+  // onToggleFocus,
 }: HeaderProps) {
+  /* ── Search (disabled to declutter header) ───────────────────────────
   const [searching, setSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -41,27 +38,25 @@ export function Header({
   useEffect(() => {
     if (filter) setSearching(true);
   }, [filter]);
+  ────────────────────────────────────────────────────────────────────── */
 
   return (
     <header className="flex-none border-b border-[var(--color-border-subtle)]">
       {/* Row 1: brand + actions */}
-      <div className="flex items-center gap-2 px-3 pt-2.5">
-        <div
-          className="flex-none w-5 h-5 inline-flex items-center justify-center rounded-md"
+      <div className="flex items-center px-3 pt-2.5">
+        <GlossLogo size={20} />
+        <span
+          className="font-semibold uppercase text-[var(--color-fg-subtle)]"
           style={{
-            background: 'color-mix(in oklab, var(--color-accent) 14%, transparent)',
-            color: 'var(--color-accent)',
+            fontSize: 11,
+            letterSpacing: '0.22em',
+            marginLeft: 6,
           }}
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 7a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3h-4l-3 3-3-3H7a3 3 0 0 1-3-3z" />
-            <path d="M9 10.5l2 2 4-4" />
-          </svg>
-        </div>
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[var(--color-fg-subtle)]">
           Gloss
         </span>
         <div className="ml-auto flex items-center gap-0.5">
+          {/* ── Search button / input (disabled) ─────────────────────────
           {!searching ? (
             <IconButton label="Search concepts" onClick={() => setSearching(true)}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -98,42 +93,10 @@ export function Header({
               </IconButton>
             </div>
           )}
-          <button
-            type="button"
-            onClick={onToggleNotes}
-            title={notesOpen ? 'Back to concepts' : 'Open notes'}
-            aria-label="Toggle notes"
-            aria-pressed={notesOpen}
-            className="relative w-7 h-7 inline-flex items-center justify-center rounded-md transition-colors"
-            style={
-              notesOpen
-                ? {
-                    color: 'var(--color-accent)',
-                    background: 'color-mix(in oklab, var(--color-accent) 14%, transparent)',
-                  }
-                : { color: 'var(--color-fg-muted)' }
-            }
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-            </svg>
-            {notesCount > 0 && !notesOpen && (
-              <span
-                className="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center text-[8px] font-semibold tabular-nums"
-                style={{
-                  minWidth: '12px',
-                  height: '12px',
-                  padding: '0 3px',
-                  borderRadius: '6px',
-                  background: 'var(--color-accent)',
-                  color: 'var(--color-accent-fg)',
-                  lineHeight: 1,
-                }}
-              >
-                {notesCount > 99 ? '99+' : notesCount}
-              </span>
-            )}
-          </button>
+          ─────────────────────────────────────────────────────────────── */}
+          {/* Notes now live on their own tab under the caption strip — no
+              need for a bookmark toggle in the header. */}
+          {/* ── Focus-mode toggle (disabled) ─────────────────────────────
           <button
             type="button"
             onClick={onToggleFocus}
@@ -159,6 +122,7 @@ export function Header({
               <circle cx="12" cy="12" r="2" fill="currentColor" />
             </svg>
           </button>
+          ─────────────────────────────────────────────────────────────── */}
           <button
             type="button"
             onClick={onRegenerate}
@@ -194,15 +158,19 @@ export function Header({
       </div>
 
       {/* Row 2: domain heading */}
-      <div className="flex items-baseline gap-2 px-3 pt-0.5 pb-2">
-        <h2 className="flex-1 min-w-0 truncate text-[14px] font-bold text-[var(--color-fg)] leading-tight">
+      <div className="flex items-baseline px-3 pt-3 pb-2.5">
+        <h2
+          className="flex-1 min-w-0 truncate text-[var(--color-fg)]"
+          style={{
+            fontFamily: '"Source Serif 4", Georgia, serif',
+            fontSize: 17,
+            fontWeight: 600,
+            lineHeight: 1.2,
+            letterSpacing: '-0.01em',
+          }}
+        >
           {domain || 'Understanding this video'}
         </h2>
-        {conceptCount > 0 && (
-          <span className="flex-none font-mono text-[10.5px] tabular-nums text-[var(--color-fg-subtle)]">
-            {conceptCount} concepts
-          </span>
-        )}
       </div>
     </header>
   );

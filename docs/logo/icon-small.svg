@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Small-size icon variant: thicker strokes, larger glyph so the burst
+       still reads at 16×16 and 32×32 in the browser toolbar. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1D1740"/>
+      <stop offset="100%" stop-color="#120E22"/>
+    </linearGradient>
+  </defs>
+
+  <rect
+    x="0.5" y="0.5"
+    width="127" height="127"
+    rx="24"
+    fill="url(#tile)"
+    stroke="#2B2352"
+    stroke-width="1"/>
+
+  <!-- Glyph takes ~75% of the tile (96px) and uses a thicker stroke. -->
+  <svg x="16" y="16" width="96" height="96" viewBox="0 0 24 24"
+       fill="none"
+       stroke="#A197F2"
+       stroke-width="2.2"
+       stroke-linecap="round"
+       stroke-linejoin="round">
+    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+  </svg>
+</svg>

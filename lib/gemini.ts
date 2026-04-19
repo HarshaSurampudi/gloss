@@ -175,6 +175,9 @@ ${priorList}`,
       generationConfig: {
         responseMimeType: 'application/json',
         responseSchema: schema,
+        thinkingConfig: {
+          thinkingLevel: 'MINIMAL',
+        },
       },
     }),
   });
@@ -232,11 +235,210 @@ export async function generateText(opts: {
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: opts.systemInstruction }] },
       contents: opts.contents,
+      generationConfig: {
+        thinkingConfig: {
+          thinkingLevel: 'MINIMAL',
+        },
+      },
     }),
   });
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+}
+
+/**
+ * Structured JSON completion. Used for the deep-dive and follow-up calls
+ * where we want the model to return multiple fields (body, related ids,
+ * suggested follow-ups) in a single response.
+ */
+async function generateStructured<T>(opts: {
+  apiKey: string;
+  model: string;
+  systemInstruction: string;
+  contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
+  schema: unknown;
+}): Promise<T> {
+  const res = await fetch(`${BASE}/models/${opts.model}:generateContent?key=${opts.apiKey}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: opts.systemInstruction }] },
+      contents: opts.contents,
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: opts.schema,
+        thinkingConfig: { thinkingLevel: 'MINIMAL' },
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
+  const payload = await res.json();
+  const text = payload.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  return JSON.parse(text) as T;
+}
+
+export interface KeyMoment {
+  startSec: number;
+  endSec: number;
+  label: string;
+  description: string;
+}
+
+export interface VideoSummaryResult {
+  summary: string;
+  keyMoments: KeyMoment[];
+}
+
+export async function generateVideoSummary(opts: {
+  apiKey: string;
+  model: string;
+  transcript: string;
+  videoTitle?: string;
+  explainInLang: string;
+  additionalContext?: string;
+}): Promise<VideoSummaryResult> {
+  const readerLine = opts.additionalContext?.trim()
+    ? `YOUR READER (shape the angle to fit this person): ${opts.additionalContext.trim()}`
+    : `YOUR READER: a curious non-specialist deciding whether to invest time watching this.`;
+
+  const system = `You are summarizing a YouTube video for someone deciding if it's worth watching and which parts to prioritize.
+
+${readerLine}
+
+Respond in ${opts.explainInLang}. Output JSON with two fields:
+
+SUMMARY — 2–4 sentences, neutral, information-dense. State what the video actually does (argues, teaches, demonstrates). Do not editorialize, do not hype, do not restate the title.
+
+KEY MOMENTS — 4–8 segments ranked by how essential they are for understanding the video. Each:
+- startSec / endSec: second-precise timestamps inside the transcript
+- label: ≤ 6 words, concrete
+- description: exactly one sentence explaining what happens in the segment and why it matters
+
+Rules:
+- Each moment must be 30s–8m long.
+- Skip intros, outros, sponsor reads, filler recaps.
+- The collected moments should cover the core content end-to-end — no gaping holes.
+- Never invent content not in the transcript.`;
+
+  const schema = {
+    type: 'object',
+    properties: {
+      summary: { type: 'string' },
+      keyMoments: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            startSec: { type: 'number' },
+            endSec: { type: 'number' },
+            label: { type: 'string' },
+            description: { type: 'string' },
+          },
+          required: ['startSec', 'endSec', 'label', 'description'],
+        },
+      },
+    },
+    required: ['summary', 'keyMoments'],
+  };
+
+  const userParts: string[] = [];
+  if (opts.videoTitle) userParts.push(`Video title: ${opts.videoTitle}`);
+  userParts.push(`\nFULL TRANSCRIPT:\n${opts.transcript}`);
+
+  const result = await generateStructured<VideoSummaryResult>({
+    apiKey: opts.apiKey,
+    model: opts.model,
+    systemInstruction: system,
+    contents: [{ role: 'user', parts: [{ text: userParts.join('\n') }] }],
+    schema,
+  });
+
+  // Defensive: drop malformed moments so downstream UI can trust the data.
+  const keyMoments = (result.keyMoments ?? []).filter(
+    (m) =>
+      typeof m.startSec === 'number' &&
+      typeof m.endSec === 'number' &&
+      m.endSec > m.startSec &&
+      typeof m.label === 'string' &&
+      m.label.trim().length > 0,
+  );
+
+  return { summary: result.summary ?? '', keyMoments };
+}
+
+export interface DeepDiveResult {
+  body: string;
+  followupPrompts: string[];
+}
+
+export interface FollowupResult {
+  answer: string;
+  followupPrompts: string[];
+}
+
+export async function generateDeepDive(opts: {
+  apiKey: string;
+  model: string;
+  system: string;
+  user: string;
+}): Promise<DeepDiveResult> {
+  const schema = {
+    type: 'object',
+    properties: {
+      body: {
+        type: 'string',
+        description:
+          'The full deep-dive explanation using the exact markdown heading structure specified in the system prompt.',
+      },
+      followupPrompts: {
+        type: 'array',
+        description:
+          '3-4 short, natural follow-up questions the viewer might want to ask about the target concept. Each ≤12 words, phrased as a question, no trailing period-chain.',
+        items: { type: 'string' },
+      },
+    },
+    required: ['body', 'followupPrompts'],
+  };
+  return generateStructured<DeepDiveResult>({
+    apiKey: opts.apiKey,
+    model: opts.model,
+    systemInstruction: opts.system,
+    contents: [{ role: 'user', parts: [{ text: opts.user }] }],
+    schema,
+  });
+}
+
+export async function generateFollowupAnswer(opts: {
+  apiKey: string;
+  model: string;
+  system: string;
+  history: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
+}): Promise<FollowupResult> {
+  const schema = {
+    type: 'object',
+    properties: {
+      answer: {
+        type: 'string',
+        description:
+          'The direct answer to the user\'s latest question, in the tone defined by the system prompt.',
+      },
+      followupPrompts: {
+        type: 'array',
+        description:
+          '2-3 short natural follow-up questions a curious user might ask next. Each ≤12 words, phrased as a question.',
+        items: { type: 'string' },
+      },
+    },
+    required: ['answer', 'followupPrompts'],
+  };
+  return generateStructured<FollowupResult>({
+    apiKey: opts.apiKey,
+    model: opts.model,
+    systemInstruction: opts.system,
+    contents: opts.history,
+    schema,
+  });
 }
 
 export function buildDetailSystem(opts: {
@@ -261,7 +463,9 @@ Write in ${opts.explainInLang}. Use clear, plain language — a knowledgeable fr
 ## Background
 1-2 paragraphs of the history, prerequisites, or surrounding context a reader would need to fully appreciate the concept.
 
-Avoid marketing tone and hype. Don't repeat the concept's label as the first words. Never speculate — if something isn't in the transcript or isn't well-established, say so. Do NOT add any headings besides the three above.`;
+Avoid marketing tone and hype. Don't repeat the concept's label as the first words. Never speculate — if something isn't in the transcript or isn't well-established, say so. Do NOT add any headings besides the three above.
+
+Output: return structured JSON with two fields — \`body\` (the markdown deep-dive above) and \`followupPrompts\` (3-4 short natural follow-up questions a curious viewer might ask about this concept, each ≤12 words, phrased as questions).`;
 }
 
 export function buildDetailUserContent(opts: {
@@ -281,6 +485,9 @@ export function buildDetailUserContent(opts: {
   parts.push(
     `\n=== FULL VIDEO TRANSCRIPT (context only — use to understand how the speaker treats the target concept; do not summarize the whole video) ===\n${opts.fullTranscript}`,
   );
+  parts.push(
+    `\nReturn structured JSON with two fields: body (the markdown deep-dive) and followupPrompts (3-4 short follow-up questions ≤12 words each, phrased as questions).`,
+  );
   return parts.join('\n');
 }
 
@@ -296,7 +503,9 @@ export function buildFollowupSystem(opts: {
 
 Tone: helpful, concise, calm, respectful of the reader's intelligence. Default to 1-3 short paragraphs. Only use bullet lists when the user explicitly asks or when the information is genuinely a list. No markdown headings in follow-up answers.
 
-If the user's question drifts far from the concept, gently redirect once and then answer. Never speculate — if you don't know, say so.`;
+If the user's question drifts far from the concept, gently redirect once and then answer. Never speculate — if you don't know, say so.
+
+Output: return structured JSON with two fields — \`answer\` (your reply text) and \`followupPrompts\` (2-3 short natural follow-up questions the viewer might ask next, each ≤12 words, phrased as questions).`;
 }
 
 export function extractWindow(

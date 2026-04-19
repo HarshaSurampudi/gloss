@@ -178,90 +178,97 @@ function Compact({ segments, texts, currentT, onSeek, onExpand, langToggle }: Co
       : null;
 
   return (
-    <div
-      className="flex-none relative border-b border-[var(--color-border-subtle)]"
-      style={{
-        background:
-          'linear-gradient(180deg, color-mix(in oklab, var(--color-accent-soft) 30%, var(--color-bg)) 0%, var(--color-bg) 100%)',
-      }}
-    >
-      <div className="flex items-center gap-1.5 px-3 pt-2 pb-1">
+    <div className="flex-none border-b border-[var(--color-border-subtle)] bg-[var(--color-bg)]">
+      {/* Header row: eyebrow + timestamp on the left, tools on the right.
+          Full-transcript button lives here, not overlapped with text below. */}
+      <div className="flex items-center gap-2 px-3 pt-1.5 pb-1">
         <span
-          className="w-1.5 h-1.5 rounded-full anim-breathe"
+          className="w-1.5 h-1.5 rounded-full anim-breathe flex-none"
           style={{ background: 'var(--color-accent)' }}
         />
         <span className="text-[9.5px] uppercase tracking-[0.14em] text-[var(--color-fg-subtle)] font-semibold">
           Transcript
         </span>
         <span className="font-mono text-[10px] text-[var(--color-fg-subtle)] tabular-nums">
-          · {formatTime(currentT)}
+          {formatTime(currentT)}
         </span>
-        <div className="ml-auto">{langToggle}</div>
+        <div className="ml-auto flex items-center gap-1">
+          {langToggle}
+          <button
+            type="button"
+            onClick={onExpand}
+            title="Open full transcript"
+            aria-label="Open full transcript"
+            className="inline-flex items-center gap-1 h-5 px-1.5 rounded text-[9.5px] font-medium text-[var(--color-fg-subtle)] hover:text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)] transition-colors"
+          >
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 14v6h6M20 10V4h-6M14 4l6 6M4 20l6-6" />
+            </svg>
+            Full
+          </button>
+        </div>
       </div>
 
-      <div className="px-4 pb-2.5 pt-0.5">
-        <Line
+      {/* Three lines. Prev + next are single-line truncated whispers; the
+          current line is the visual anchor. Clear vertical rhythm, no
+          background gradient. */}
+      <div className="px-3 pb-2.5 pt-0.5 space-y-[3px]">
+        <WhisperLine
           text={prev?.text}
           onClick={prev ? () => onSeek(prev.seg.start) : undefined}
-          variant="faint"
         />
         <div
           key={current?.seg.start ?? -1}
-          className="py-1 anim-caption-in"
-          style={{ lineHeight: 1.35 }}
+          className="anim-caption-in"
+          style={{
+            paddingLeft: 8,
+            borderLeft: '2px solid var(--color-accent)',
+          }}
         >
           {current?.text ? (
-            <span className="text-[14px] font-semibold text-[var(--color-fg)]">
+            <div
+              className="text-[13.5px] font-semibold text-[var(--color-fg)]"
+              style={{
+                // Single line, truncated with a trailing ellipsis. This
+                // keeps the caption strip the same height regardless of
+                // how long the current transcript line is, so nothing
+                // below (timeline + concepts) ever jumps. Full text is
+                // still reachable via the "Full" button in the header.
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                lineHeight: 1.4,
+              }}
+              title={current.text}
+            >
               {current.text}
-            </span>
+            </div>
           ) : (
-            <span className="text-[13px] italic text-[var(--color-fg-subtle)]">
+            <div
+              className="text-[12.5px] italic text-[var(--color-fg-subtle)]"
+              style={{ lineHeight: 1.4 }}
+            >
               Waiting for the speaker…
-            </span>
+            </div>
           )}
         </div>
-        <Line
+        <WhisperLine
           text={next?.text}
           onClick={next ? () => onSeek(next.seg.start) : undefined}
-          variant="faint"
         />
       </div>
-
-      <button
-        type="button"
-        onClick={onExpand}
-        title="Open full transcript"
-        aria-label="Open full transcript"
-        className="absolute bottom-1.5 right-2 inline-flex items-center gap-1 h-5 px-1.5 rounded text-[9.5px] text-[var(--color-fg-subtle)] hover:text-[var(--color-fg)] hover:bg-[var(--color-surface-hover)] transition-colors"
-      >
-        Full
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M4 14v6h6M20 10V4h-6M14 4l6 6M4 20l6-6" />
-        </svg>
-      </button>
     </div>
   );
 }
 
-function Line({
-  text,
-  variant,
-  onClick,
-}: {
-  text?: string;
-  variant: 'faint';
-  onClick?: () => void;
-}) {
+function WhisperLine({ text, onClick }: { text?: string; onClick?: () => void }) {
   if (!text) return <div className="h-[14px]" />;
-  const cls =
-    variant === 'faint'
-      ? 'text-[11.5px] text-[var(--color-fg-subtle)] leading-snug truncate'
-      : '';
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`block w-full text-left ${cls} hover:text-[var(--color-fg-muted)] transition-colors`}
+      className="block w-full text-left text-[11px] leading-snug truncate text-[var(--color-fg-subtle)] hover:text-[var(--color-fg-muted)] transition-colors"
+      style={{ paddingLeft: 10 }}
     >
       {text}
     </button>

@@ -79,7 +79,9 @@ export function Timeline({
         />
 
         {/* processed-windows tint — subtle accent bar per successfully-scanned
-            window, so the user sees how far the chunked run has progressed. */}
+            window, so the user sees how far the chunked run has progressed.
+            Each segment is a pill so it rounds nicely against the track's
+            own rounded ends. */}
         {(processedWindows ?? []).map((w) => {
           const left = Math.max(0, (w.startSec / d) * 100);
           const right = Math.min(100, (w.endSec / d) * 100);
@@ -87,7 +89,7 @@ export function Timeline({
           return (
             <div
               key={`proc-${w.startSec}`}
-              className="absolute top-0 bottom-0 pointer-events-none"
+              className="absolute top-0 bottom-0 pointer-events-none rounded-full"
               style={{
                 left: `${left}%`,
                 width: `${width}%`,
@@ -131,7 +133,7 @@ export function Timeline({
                 onRetryWindow?.(w);
               }}
               title={`Couldn't analyze ${Math.floor(w.startSec / 60)}:${String(Math.floor(w.startSec) % 60).padStart(2, '0')}–${Math.floor(w.endSec / 60)}:${String(Math.floor(w.endSec) % 60).padStart(2, '0')}. Click to retry.`}
-              className="absolute top-0 bottom-0 rounded-sm cursor-pointer transition-opacity hover:opacity-100"
+              className="absolute top-0 bottom-0 rounded-full cursor-pointer transition-opacity hover:opacity-100"
               style={{
                 left: `${left}%`,
                 width: `${width}%`,

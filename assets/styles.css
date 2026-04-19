@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,300..700&display=swap');
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -141,17 +142,50 @@ body {
   overscroll-behavior: contain;
 }
 
-/* Slim scrollbar */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 999px; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-fg-subtle); }
+/* Custom scrollbar — slim, subtle, brightens on hover.
+   Firefox uses the `scrollbar-*` shorthand; WebKit uses the pseudo elements. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--color-fg) 22%, transparent) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--color-fg) 18%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background 180ms ease;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--color-accent) 55%, transparent);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:active {
+  background: var(--color-accent);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
 
-/* Focus ring */
+/* Focus ring — for keyboard nav on interactive elements. Text inputs and
+   textareas suppress it because they already convey focus via the caret +
+   container styling, and the ring clashes with our custom input chrome. */
 :focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
   border-radius: 6px;
+}
+input:focus-visible,
+textarea:focus-visible,
+[contenteditable]:focus-visible {
+  outline: none;
 }
 
 /* Card entry animation */
@@ -215,6 +249,21 @@ body {
 }
 .anim-slide {
   animation: slide-lr 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Loading-state primitives — the GeneratingView panel uses these. */
+@keyframes gloss-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.anim-gloss-shimmer {
+  animation: gloss-shimmer 2.4s linear infinite;
+}
+@keyframes gloss-spin-slow {
+  to { transform: rotate(360deg); }
+}
+.anim-gloss-spin {
+  animation: gloss-spin-slow 1.6s linear infinite;
 }
 
 .no-scrollbar {
